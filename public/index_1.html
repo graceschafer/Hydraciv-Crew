@@ -1,0 +1,1029 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Hydraciv Crew Portal</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ground:#eef2f2; --surface:#ffffff; --surface-2:#e2e9eb; --surface-3:#d7e0e2;
+    --ink:#16222b; --ink-soft:#55676f; --ink-faint:#7d8d94; --line:#ccd7da;
+    --accent:#1c5c86; --accent-strong:#123f5c; --accent-soft:#e1edf3; --accent-ink:#ffffff;
+    --amber:#c96a1f; --amber-soft:#faead9; --amber-ink:#2a1503;
+    --success:#2f8f5b; --success-soft:#e3f3ea;
+    --warning:#b5791c; --warning-soft:#faedd6; --warning-ink:#5a3d0f;
+    --danger:#b3453a; --danger-soft:#f7e4e1;
+    --violet:#6a4fa0; --violet-soft:#ece6f5;
+    --focus:#1c5c86;
+    --shadow: 0 1px 2px rgba(20,30,36,.06), 0 6px 20px -8px rgba(20,30,36,.18);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#0e151b; --surface:#161f27; --surface-2:#1d2831; --surface-3:#25313b;
+      --ink:#e7edef; --ink-soft:#a3b3ba; --ink-faint:#7c8d95; --line:#2b3a44;
+      --accent:#72b4de; --accent-strong:#9fd1ee; --accent-soft:#1c3a4a; --accent-ink:#062231;
+      --amber:#f0a257; --amber-soft:#3a2a16; --amber-ink:#2a1503;
+      --success:#72cd99; --success-soft:#17301f;
+      --warning:#f0b95a; --warning-soft:#332708; --warning-ink:#f0b95a;
+      --danger:#e6968b; --danger-soft:#3a1f1c;
+      --violet:#b7a3dd; --violet-soft:#2a2440;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -10px rgba(0,0,0,.6);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0e151b; --surface:#161f27; --surface-2:#1d2831; --surface-3:#25313b;
+    --ink:#e7edef; --ink-soft:#a3b3ba; --ink-faint:#7c8d95; --line:#2b3a44;
+    --accent:#72b4de; --accent-strong:#9fd1ee; --accent-soft:#1c3a4a; --accent-ink:#062231;
+    --amber:#f0a257; --amber-soft:#3a2a16; --amber-ink:#2a1503;
+    --success:#72cd99; --success-soft:#17301f;
+    --warning:#f0b95a; --warning-soft:#332708; --warning-ink:#f0b95a;
+    --danger:#e6968b; --danger-soft:#3a1f1c;
+    --violet:#b7a3dd; --violet-soft:#2a2440;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -10px rgba(0,0,0,.6);
+    color-scheme: dark;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{background:var(--ground);}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:"IBM Plex Sans", system-ui, sans-serif;
+    font-size:15px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3{font-family:"Big Shoulders Display","IBM Plex Sans",sans-serif; text-wrap:balance; margin:0; letter-spacing:.01em;}
+  .mono{font-family:"IBM Plex Mono", ui-monospace, monospace; font-variant-numeric:tabular-nums;}
+  a{color:inherit;}
+  button{font-family:inherit; font-size:inherit;}
+  input,textarea,select{font-family:inherit; font-size:16px; color:var(--ink); background:var(--surface);}
+  ::selection{background:var(--accent-soft);}
+  :focus-visible{outline:2px solid var(--focus); outline-offset:2px;}
+  @media (prefers-reduced-motion: reduce){ *{animation-duration:.001ms !important; transition-duration:.001ms !important;} }
+
+  .app{max-width:900px; margin:0 auto; padding-bottom:64px;}
+
+  /* header */
+  .hero{
+    position:relative; overflow:hidden; background:var(--accent-strong); color:#eef6fb;
+    padding:22px 18px 0;
+  }
+  .hero::before{
+    content:""; position:absolute; inset:0;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(255,255,255,.055) 0 1px, transparent 1px 28px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.055) 0 1px, transparent 1px 28px);
+    opacity:.5; pointer-events:none;
+  }
+  .hero-top{position:relative; display:flex; align-items:flex-start; justify-content:space-between; gap:12px;}
+  .eyebrow{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:#bcdcef; margin:0 0 6px;}
+  .hero h1{font-size:34px; font-weight:800; color:#fff;}
+  .hero p.sub{margin:6px 0 0; color:#cfe6f4; font-size:13.5px; max-width:34ch;}
+  .who{position:relative; text-align:right; flex-shrink:0;}
+  .who .name{font-weight:600; font-size:13.5px; color:#fff;}
+  .who .role{font-size:10.5px; color:#9fcbe3; text-transform:uppercase; letter-spacing:.06em;}
+  .who button{
+    background:none; border:none; color:#bcdcef; font-size:12px; text-decoration:underline;
+    text-underline-offset:2px; cursor:pointer; padding:2px 0; margin-top:2px;
+  }
+  .sync-dot{display:inline-block; width:6px; height:6px; border-radius:50%; background:#7fd9a8; margin-right:5px; vertical-align:1px;}
+  .sync-note{position:relative; font-size:11px; color:#a9c9dc; padding:10px 0 12px; display:flex; align-items:center;}
+
+  /* tabs */
+  .tabbar{position:relative; display:flex; gap:2px; padding-top:6px;}
+  .tabbar button{
+    background:none; border:none; color:#cfe6f4; padding:10px 16px 12px; cursor:pointer;
+    font-weight:600; font-size:14px; border-bottom:3px solid transparent; opacity:.72;
+  }
+  .tabbar button.active{opacity:1; color:#fff; border-bottom-color:var(--amber);}
+
+  main{padding:18px 16px 0;}
+
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:18px; box-shadow:var(--shadow);}
+  .card + .card{margin-top:14px;}
+  .section-title{font-size:20px; font-weight:700; margin-bottom:2px;}
+  .section-sub{color:var(--ink-soft); font-size:13px; margin:0 0 14px;}
+
+  .field{display:flex; flex-direction:column; gap:6px; margin-bottom:16px;}
+  .field label{font-size:12.5px; font-weight:600; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.04em;}
+  .field input[type="text"], .field input[type="number"], .field input[type="date"], .field input[type="password"], .field input[type="tel"],
+  .field textarea, .field select{
+    border:1px solid var(--line); background:var(--surface); border-radius:9px; padding:11px 12px; color:var(--ink); width:100%;
+  }
+  .field textarea{min-height:74px; resize:vertical; font-family:inherit;}
+  .hint{font-size:12px; color:var(--ink-faint); margin-top:2px;}
+  .row2{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  @media (max-width:520px){.row2{grid-template-columns:1fr;}}
+
+  .seg{display:flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; flex-wrap:wrap;}
+  .seg button{
+    flex:1; background:var(--surface); border:none; padding:10px 8px; cursor:pointer;
+    color:var(--ink-soft); font-weight:600; font-size:13px; border-right:1px solid var(--line); min-width:80px;
+  }
+  .seg button:last-child{border-right:none;}
+  .seg button.on{background:var(--accent); color:var(--accent-ink);}
+  .seg-status button[data-val="quoted"].on{background:var(--violet); color:#fff;}
+  .seg-status button[data-val="in-process"].on{background:var(--accent);}
+  .seg-status button[data-val="completed"].on{background:var(--success);}
+  .seg-status button[data-val="invoiced"].on{background:var(--ink); color:var(--ground);}
+
+  .chips{display:flex; flex-wrap:wrap; gap:8px;}
+  .chip{border:1px solid var(--line); background:var(--surface); border-radius:999px; padding:8px 14px; cursor:pointer; font-size:13.5px; font-weight:500; color:var(--ink-soft);}
+  .chip.on{background:var(--accent-soft); border-color:var(--accent); color:var(--accent-strong); font-weight:600;}
+
+  .btn{display:inline-flex; align-items:center; justify-content:center; gap:8px; border-radius:10px; padding:13px 18px; font-weight:700; font-size:14.5px; cursor:pointer; border:1px solid transparent; min-height:48px;}
+  .btn-primary{background:var(--amber); color:var(--amber-ink);}
+  .btn-primary:hover{filter:brightness(1.04);}
+  .btn-outline{background:transparent; border-color:var(--line); color:var(--ink);}
+  .btn-ghost{background:transparent; border-color:transparent; color:var(--accent-strong); padding:8px 10px; min-height:auto;}
+  .btn-sm{padding:8px 12px; min-height:36px; font-size:13px;}
+  .btn:disabled{opacity:.5; cursor:not-allowed;}
+  .btn-block{width:100%;}
+
+  .msg{border-radius:9px; padding:10px 12px; font-size:13.5px; margin-bottom:14px;}
+  .msg-error{background:var(--danger-soft); color:var(--danger);}
+  .msg-success{background:var(--success-soft); color:var(--success);}
+  .msg-info{background:var(--accent-soft); color:var(--accent-strong);}
+
+  .pill{display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:700; padding:4px 9px; border-radius:999px; letter-spacing:.02em;}
+  .pill-success{background:var(--success-soft); color:var(--success);}
+  .pill-warning{background:var(--warning-soft); color:var(--warning);}
+  .pill-neutral{background:var(--surface-2); color:var(--ink-soft);}
+  .pill-accent{background:var(--accent-soft); color:var(--accent-strong);}
+  .pill-violet{background:var(--violet-soft); color:var(--violet);}
+  .pill-ink{background:var(--ink); color:var(--ground);}
+
+  .picker-list{display:flex; flex-direction:column; gap:8px;}
+  .picker-btn{text-align:left; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:13px 14px; font-weight:600; cursor:pointer; color:var(--ink); font-size:15px;}
+  .picker-btn:hover{border-color:var(--accent);}
+  .picker-btn.sel{border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong);}
+
+  .pin-dots{display:flex; gap:10px; justify-content:center; margin:6px 0 4px;}
+  .pin-input{width:100%; text-align:center; font-family:"IBM Plex Mono",monospace; font-size:26px; letter-spacing:.5em; padding:12px !important;}
+
+  .log-card{border:1px solid var(--line); border-radius:10px; padding:13px 14px; background:var(--surface);}
+  .log-card + .log-card{margin-top:10px;}
+  .log-top{display:flex; justify-content:space-between; align-items:flex-start; gap:10px;}
+  .log-venue{font-weight:700; font-size:15px;}
+  .log-desc{font-size:13px; color:var(--ink-soft); margin-top:1px;}
+  .log-meta{color:var(--ink-soft); font-size:12.5px; margin-top:3px;}
+  .log-body{margin-top:8px; font-size:13.5px; color:var(--ink);}
+  .log-foot{margin-top:9px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
+  .log-followup{margin-top:8px; background:var(--warning-soft); color:var(--warning-ink); border-radius:8px; padding:8px 10px; font-size:13px;}
+
+  .stat-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px;}
+  @media (max-width:640px){.stat-grid{grid-template-columns:repeat(2,1fr);}}
+  .stat-tile{background:var(--surface-2); border-radius:10px; padding:12px 14px;}
+  .stat-tile .num{font-family:"Big Shoulders Display"; font-size:28px; font-weight:800; line-height:1;}
+  .stat-tile .label{font-size:11.5px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.04em; margin-top:4px;}
+
+  .bar-row{display:grid; grid-template-columns:110px 1fr 52px; align-items:center; gap:10px; margin-bottom:8px;}
+  .bar-name{font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .bar-track{background:var(--surface-2); border-radius:6px; height:10px; overflow:hidden;}
+  .bar-fill{background:var(--accent); height:100%; border-radius:6px;}
+  .bar-val{font-size:12.5px; text-align:right; color:var(--ink-soft);}
+
+  .subtabs{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px;}
+  .subtabs button{background:var(--surface-2); border:1px solid transparent; border-radius:8px; padding:8px 13px; font-size:13px; font-weight:600; color:var(--ink-soft); cursor:pointer;}
+  .subtabs button.on{background:var(--accent); color:var(--accent-ink);}
+
+  .weeknav{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; gap:10px;}
+  .weeknav .label{font-weight:700; font-size:14.5px;}
+  .weeknav button{background:var(--surface-2); border:none; border-radius:8px; width:34px; height:34px; cursor:pointer; font-size:16px; color:var(--ink);}
+
+  .day-heading{font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); margin:16px 0 8px;}
+  .day-heading:first-child{margin-top:0;}
+
+  .empty-note{color:var(--ink-soft); font-size:13.5px; padding:14px 2px;}
+
+  .crew-row{display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); gap:10px;}
+  .crew-row:last-child{border-bottom:none;}
+  .crew-row .info .name{font-weight:600;}
+  .crew-row .info .email{font-size:12px; color:var(--ink-soft);}
+
+  .job-card{border:1px solid var(--line); border-radius:10px; padding:14px 15px;}
+  .job-card + .job-card{margin-top:10px;}
+  .job-head{display:flex; justify-content:space-between; align-items:flex-start; gap:10px;}
+  .job-num{font-family:"IBM Plex Mono"; font-weight:600; font-size:12.5px; color:var(--accent-strong);}
+  .timeline{margin-top:10px; padding-top:10px; border-top:1px solid var(--line);}
+  .timeline-item{padding:8px 0; border-bottom:1px dashed var(--line); font-size:13px;}
+  .timeline-item:last-child{border-bottom:none;}
+
+  .footer-note{text-align:center; color:var(--ink-faint); font-size:12px; padding:22px 18px 8px;}
+
+  .toast{position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:var(--ink); color:var(--ground); padding:11px 18px; border-radius:999px; font-size:13.5px; font-weight:600; box-shadow:var(--shadow); z-index:50;}
+  :root[data-theme="dark"] .toast, :root:not([data-theme="light"]) .toast{background:var(--surface-3); color:var(--ink);}
+
+  .center-card{max-width:420px; margin:0 auto;}
+</style>
+</head>
+<body>
+
+<div id="root" class="app"></div>
+<div id="toast-host"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  var LS_SESSION = "hydraciv:session";
+  var root = document.getElementById("root");
+  var toastHost = document.getElementById("toast-host");
+  var db = null;
+  var dbStatus = "loading"; // loading | ready | unavailable
+
+  function loadSession(){
+    try{ var raw = localStorage.getItem(LS_SESSION); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
+  }
+  function saveSession(s){ try{ localStorage.setItem(LS_SESSION, JSON.stringify(s)); }catch(e){} }
+  function clearSession(){ try{ localStorage.removeItem(LS_SESSION); }catch(e){} }
+
+  var state = {
+    crew: [], jobs: [], jobLogs: [], logins: [],
+    session: loadSession(),
+    activeTab: "log", mgmtSub: "overview",
+    loginName: "", loginError: "", pinError: "",
+    setupError: "",
+    logView: "list", updateJobId: null, editLogId: null, editingJobId: null,
+    formMsg: null, formBusy: false,
+    jobsStatusFilter: "all",
+    crewFormOpen: false, crewRole: "employee",
+    tsEmployee: null, tsWeekOffset: 0,
+  };
+
+  function esc(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];
+    });
+  }
+  function genPin(){ return String(Math.floor(1000 + Math.random()*9000)); }
+  function pad2(n){ return n < 10 ? "0"+n : ""+n; }
+  function todayStr(){ var d = new Date(); return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
+  function parseDate(s){ var p = s.split("-"); return new Date(+p[0], +p[1]-1, +p[2]); }
+  function fmtDay(s){ var d = parseDate(s); return d.toLocaleDateString(undefined, {weekday:"short", day:"numeric", month:"short"}); }
+  function fmtShort(s){ var d = parseDate(s); return d.toLocaleDateString(undefined, {day:"numeric", month:"short"}); }
+  function fmtTime(iso){ try{ return new Date(iso).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}); }catch(e){ return ""; } }
+  function getMonday(d){ var day=d.getDay(); var diff=(day===0?-6:1-day); return new Date(d.getFullYear(), d.getMonth(), d.getDate()+diff); }
+  function dateToStr(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
+  function weekBounds(offset){
+    var base = new Date(); base = new Date(base.getFullYear(), base.getMonth(), base.getDate()+offset*7);
+    var mon = getMonday(base); var sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate()+6);
+    return {startStr: dateToStr(mon), endStr: dateToStr(sun)};
+  }
+  function inRange(d,a,b){ return d>=a && d<=b; }
+  function numHours(v){ var n = parseFloat(v); return isNaN(n) ? 0 : n; }
+  function statusLabel(s){ return {quoted:"Quoted","in-process":"In process",completed:"Completed",invoiced:"Invoiced"}[s] || "Quoted"; }
+  function statusPillClass(s){ return {quoted:"pill-violet","in-process":"pill-accent",completed:"pill-success",invoiced:"pill-ink"}[s] || "pill-violet"; }
+
+  function toast(text){
+    var el = document.createElement("div"); el.className = "toast"; el.textContent = text;
+    toastHost.appendChild(el); setTimeout(function(){ el.remove(); }, 2600);
+  }
+
+  function activeCrew(){ return state.crew.filter(function(c){ return c.active !== false; }); }
+  function isAdmin(){ return !!(state.session && state.session.role === "admin"); }
+  function loginFor(crewId){ return state.logins.filter(function(l){ return l.id === crewId; })[0] || null; }
+  function jobLogsFor(jobId){ return state.jobLogs.filter(function(l){ return l.jobId === jobId; }); }
+  function openJobs(){ return state.jobs.filter(function(j){ return j.open !== false; }); }
+
+  // ---------- render ----------
+  function render(){
+    var html = "";
+    html += renderHero();
+    html += "<main>";
+    if (dbStatus === "unavailable"){
+      html += '<div class="card center-card"><div class="msg msg-error">Couldn\'t connect to the Hydraciv Crew database. Check your internet connection and reload the page — if it keeps happening, let Grace know.</div></div>';
+    } else if (dbStatus === "loading"){
+      html += '<div class="card center-card"><p class="empty-note">Loading…</p></div>';
+    } else if (state.crew.length === 0){
+      html += renderSetupAdmin();
+    } else if (!state.session){
+      html += renderLogin();
+    } else if (state.editLogId){
+      html += renderEditLogView();
+    } else if (!isAdmin()){
+      html += renderEmployeeApp();
+    } else if (state.activeTab === "log"){
+      html += renderEmployeeApp();
+    } else {
+      html += renderManagementTab();
+    }
+    html += "</main>";
+    html += '<div class="footer-note">Hydraciv Crew Portal — job sheets sync live' + (isAdmin() ? " to Management." : ".") + '</div>';
+    root.innerHTML = html;
+    bindEvents();
+  }
+
+  function renderHero(){
+    var who = "";
+    if (state.session){
+      who = '<div class="who"><div class="name">' + esc(state.session.name) + '</div><div class="role">' + (isAdmin()?"Manager":"Crew") + '</div><button data-action="logout">Log out</button></div>';
+    }
+    var tabs = "";
+    if (state.session && isAdmin()){
+      tabs = '<div class="tabbar">' +
+        '<button data-tab="log" class="' + (state.activeTab==="log"?"active":"") + '">Log a Job</button>' +
+        '<button data-tab="management" class="' + (state.activeTab==="management"?"active":"") + '">Management</button>' +
+      '</div>';
+    }
+    return (
+      '<div class="hero">' +
+        '<div class="hero-top">' +
+          '<div><p class="eyebrow">Hydraciv &middot; Field Crew</p><h1>Crew Portal</h1><p class="sub">Log the job the moment it\'s done.</p></div>' +
+          who +
+        '</div>' +
+        tabs +
+        '<div class="sync-note"><span class="sync-dot"></span>' + (dbStatus==="ready" ? "Synced live" : "Connecting…") + '</div>' +
+      '</div>'
+    );
+  }
+
+  // ---------- SETUP (first run) ----------
+  function renderSetupAdmin(){
+    var html = '<div class="card center-card"><div class="section-title">Set up your manager account</div>';
+    html += '<p class="section-sub">No one\'s set up yet. Create the first manager login — you can add the rest of the crew after.</p>';
+    if (state.setupError) html += '<div class="msg msg-error">'+esc(state.setupError)+'</div>';
+    html += '<form id="setup-form">';
+    html += field("Your name", '<input type="text" name="name" placeholder="e.g. Grace" required>');
+    html += field("Email (optional)", '<input type="text" name="email" placeholder="grace@hydraciv.com.au">');
+    html += field("Set a 4-digit PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin" class="pin-input" placeholder="••••" required>');
+    html += field("Confirm PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin2" class="pin-input" placeholder="••••" required>');
+    html += '<button type="submit" class="btn btn-primary btn-block">Create manager account</button>';
+    html += '</form></div>';
+    return html;
+  }
+
+  // ---------- LOGIN ----------
+  function renderLogin(){
+    var html = '<div class="card center-card"><div class="section-title">Log in</div><p class="section-sub">Select your name to continue.</p>';
+    html += '<div class="field"><label>Your name</label><div class="picker-list">' + activeCrew().map(function(c){
+      return '<button type="button" class="picker-btn'+(state.loginName===c.name?" sel":"")+'" data-login-name="'+esc(c.name)+'">'+esc(c.name)+'</button>';
+    }).join("") + '</div></div>';
+
+    // Employees log in with just a name tap — only manager accounts need a PIN.
+    if (state.loginName){
+      var crewMember = activeCrew().filter(function(c){ return c.name === state.loginName; })[0];
+      if (crewMember && crewMember.role !== "admin"){ return html + '</div>'; }
+      var login = crewMember ? loginFor(crewMember.id) : null;
+      if (!login || !login.pin){
+        html += '<div class="msg msg-info">First time logging in — set a 4-digit PIN you\'ll use from now on.</div>';
+        if (state.pinError) html += '<div class="msg msg-error">'+esc(state.pinError)+'</div>';
+        html += '<form id="setpin-form">';
+        html += field("Create a PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin" class="pin-input" placeholder="••••" autofocus required>');
+        html += field("Confirm PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin2" class="pin-input" placeholder="••••" required>');
+        html += '<button type="submit" class="btn btn-primary btn-block">Set PIN &amp; log in</button>';
+        html += '</form>';
+      } else {
+        if (state.loginError) html += '<div class="msg msg-error">'+esc(state.loginError)+'</div>';
+        html += '<form id="login-form">';
+        html += field("PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin" class="pin-input" placeholder="••••" autofocus required>');
+        html += '<button type="submit" class="btn btn-primary btn-block">Log in</button>';
+        html += '</form>';
+      }
+    }
+    html += '</div>';
+    return html;
+  }
+
+  // ---------- EMPLOYEE / LOG APP ----------
+  function renderEmployeeApp(){
+    var me = state.session.name;
+    var html = "";
+
+    if (state.logView === "new"){
+      html += renderJobForm({mode:"new"});
+      return html + renderRecentForMe(me);
+    }
+    if (state.logView === "update" && state.updateJobId){
+      var job = state.jobs.filter(function(j){ return j.id === state.updateJobId; })[0];
+      if (job){ html += renderJobForm({mode:"update", job:job}); return html + renderRecentForMe(me); }
+    }
+
+    var open = openJobs();
+    html += '<div class="card">';
+    html += '<div class="section-title">Your open jobs</div>';
+    html += '<p class="section-sub">Not finished yet? Add an update instead of starting a new one.</p>';
+    if (open.length === 0){
+      html += '<p class="empty-note">No open jobs right now.</p>';
+    } else {
+      open.forEach(function(j){ html += renderJobCard(j, {employeeView:true}); });
+    }
+    html += '<button class="btn btn-primary btn-block" style="margin-top:14px" data-action="new-job">Start a new job</button>';
+    html += '</div>';
+
+    html += renderRecentForMe(me);
+    return html;
+  }
+
+  function renderJobForm(opts){
+    var job = opts.job, log = opts.log || {};
+    var isEdit = opts.mode === "edit";
+    var titles = {"new":"Start a new job", "update":"Add an update", "edit":"Edit this update"};
+    var html = '<div class="card">';
+    html += '<div class="section-title">'+titles[opts.mode]+'</div>';
+    if (opts.mode === "update" || isEdit){
+      html += '<p class="section-sub">'+esc(job ? job.venue : "")+(job && job.jobDescription ? ' &middot; '+esc(job.jobDescription) : '')+'</p>';
+    } else {
+      html += '<p class="section-sub">Fill this in for the job you\'re working now.</p>';
+    }
+    html += '<button type="button" class="btn btn-ghost" data-action="back-to-list" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    if (state.formMsg) html += '<div class="msg '+(state.formMsg.type==="error"?"msg-error":"msg-success")+'">'+esc(state.formMsg.text)+'</div>';
+
+    html += '<form id="job-form" data-mode="'+opts.mode+'" '+(job?('data-job-id="'+esc(job.id)+'"'):'')+' '+(isEdit?('data-log-id="'+esc(log.id)+'"'):'')+'>';
+
+    if (opts.mode === "new"){
+      html += field("Venue / job site", '<input type="text" name="venue" list="venue-list" placeholder="e.g. 14 Marlow St — pump station" required>' +
+        '<datalist id="venue-list">'+uniqueVenues().map(function(v){return '<option value="'+esc(v)+'">';}).join("")+'</datalist>');
+      html += '<div class="field"><label>Job type</label><div class="seg" data-seg="jobType">' +
+        '<button type="button" data-val="new" class="on">New job</button><button type="button" data-val="returning">Returning job</button></div></div>';
+      html += field("Purchase order (optional)", '<select name="poNumber"><option value="">No PO</option>' +
+        state.jobs.filter(function(j){return j.poNumber;}).reduce(function(acc,j){ if(acc.indexOf(j.poNumber)===-1) acc.push(j.poNumber); return acc; },[]).map(function(p){return '<option value="'+esc(p)+'">'+esc(p)+'</option>';}).join("") +
+      '</select>');
+    }
+
+    html += field("Job description", '<textarea name="jobDescription" placeholder="What is/was the work" required>'+(isEdit?esc(log.jobDescription||""):"")+'</textarea>');
+
+    html += '<div class="row2">';
+    html += field("Date", '<input type="date" name="date" value="'+esc(isEdit?(log.date||todayStr()):todayStr())+'" required>');
+    html += field("Hours worked", '<input type="text" name="hours" value="'+esc(isEdit?(log.hours||""):"")+'" placeholder="e.g. 6.5 or 6.5h" required>');
+    html += '</div>';
+
+    var selectedEmployees = isEdit ? (log.employees||[]) : [state.session.name];
+    html += '<div class="field"><label>Who was onsite</label><div class="chips" data-chips="employees">' +
+      activeCrew().map(function(c){
+        var on = selectedEmployees.indexOf(c.name) !== -1;
+        return '<button type="button" class="chip'+(on?" on":"")+'" data-name="'+esc(c.name)+'">'+esc(c.name)+'</button>';
+      }).join("") + '</div></div>';
+
+    html += field("Materials used", '<textarea name="materials" placeholder="e.g. 2x 25mm ball valves, 10m copper pipe">'+(isEdit?esc(log.materials||""):"")+'</textarea>');
+
+    var completedVal = isEdit ? !!log.completed : true;
+    html += '<div class="field"><label>Job status</label><div class="seg" data-seg="completed">' +
+      '<button type="button" data-val="yes" class="'+(completedVal?"on":"")+'">Completed</button><button type="button" data-val="no" class="'+(!completedVal?"on":"")+'">Not finished</button></div></div>';
+
+    html += '<div id="followup-fields" style="display:'+(completedVal?"none":"block")+'">';
+    html += field("Estimated return date", '<input type="date" name="estimatedReturn" value="'+esc(isEdit?(log.estimatedReturn||""):"")+'">');
+    html += field("Work still to do", '<textarea name="remainingWork" placeholder="What\'s left to finish next visit">'+(isEdit?esc(log.remainingWork||""):"")+'</textarea>');
+    html += '</div>';
+
+    html += '<button type="submit" class="btn btn-primary btn-block" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Sending…":(isEdit?"Save changes":"Submit job sheet"))+'</button>';
+    html += '</form></div>';
+    return html;
+  }
+
+  function renderEditLogView(){
+    var log = state.jobLogs.filter(function(l){ return l.id === state.editLogId; })[0];
+    if (!log){ return '<div class="card"><p class="empty-note">That entry isn\'t there anymore.</p><button type="button" class="btn btn-outline" data-action="back-to-list">&larr; Back</button></div>'; }
+    var job = state.jobs.filter(function(j){ return j.id === log.jobId; })[0];
+    return renderJobForm({mode:"edit", job:job, log:log});
+  }
+
+  function uniqueVenues(){
+    var seen={}, out=[];
+    state.jobs.forEach(function(j){ if (j.venue && !seen[j.venue]){ seen[j.venue]=1; out.push(j.venue); } });
+    return out.slice(0,25);
+  }
+
+  function field(label, inputHtml){ return '<div class="field"><label>'+esc(label)+'</label>'+inputHtml+'</div>'; }
+
+  function renderRecentForMe(me){
+    // state.jobLogs is newest-first, so keeping the first entry seen per job
+    // shows each job's CURRENT status once, instead of a stale older entry.
+    var seenJobs = {}, mine = [];
+    state.jobLogs.forEach(function(l){
+      if (!l.employees || l.employees.indexOf(me) === -1) return;
+      var key = l.jobId || l.id;
+      if (seenJobs[key]) return;
+      seenJobs[key] = true;
+      mine.push(l);
+    });
+    mine = mine.slice(0,8);
+    var html = '<div class="card"><div class="section-title" style="font-size:17px">Your recent jobs</div>';
+    if (mine.length === 0){ html += '<p class="empty-note">Nothing logged yet.</p>'; }
+    else { mine.forEach(function(l){ html += renderLogCard(l, {compact:true, editable:true}); }); }
+    html += '</div>';
+    return html;
+  }
+
+  function renderLogCard(l, opts){
+    opts = opts || {};
+    var statusPill = l.completed ? '<span class="pill pill-success">Completed</span>' : '<span class="pill pill-warning">Follow-up needed</span>';
+    var html = '<div class="log-card">';
+    html += '<div class="log-top"><div><div class="log-venue">'+esc(l.venue)+'</div><div class="log-desc">'+esc(l.jobDescription||"")+'</div>';
+    html += '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span> &middot; '+esc((l.employees||[]).join(", "))+'</div></div>';
+    html += '<div style="text-align:right">'+statusPill+'</div></div>';
+    if (l.materials){ html += '<div class="log-body"><strong>Materials:</strong> '+esc(l.materials)+'</div>'; }
+    if (!l.completed){ html += '<div class="log-followup"><strong>Est. return:</strong> '+(l.estimatedReturn?fmtShort(l.estimatedReturn):"—")+'<br><strong>Still to do:</strong> '+esc(l.remainingWork||"—")+'</div>'; }
+    html += '<div class="log-foot"><span class="hint">logged by '+esc(l.submittedBy||"")+' &middot; '+fmtTime(l.submittedAt)+'</span>';
+    if (opts.editable){ html += '<button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" data-edit-log="'+esc(l.id)+'">Edit</button>'; }
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  // ---------- MANAGEMENT ----------
+  function renderManagementTab(){
+    var html = '<div class="subtabs">';
+    [["overview","Overview"],["jobs","Jobs"],["timesheets","Timesheets"],["crew","Crew"]].forEach(function(t){
+      html += '<button data-mgmt="'+t[0]+'" class="'+(state.mgmtSub===t[0]?"on":"")+'">'+t[1]+'</button>';
+    });
+    html += '</div>';
+    if (state.mgmtSub === "overview") html += renderOverview();
+    else if (state.mgmtSub === "jobs") html += renderJobsAdmin();
+    else if (state.mgmtSub === "timesheets") html += renderTimesheets();
+    else html += renderCrewView();
+    return html;
+  }
+
+  function renderOverview(){
+    var wk = weekBounds(0);
+    var weekLogs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr); });
+    var totalHours = weekLogs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
+    var openCount = openJobs().length;
+
+    var byEmp = {};
+    weekLogs.forEach(function(l){ (l.employees||[]).forEach(function(n){ byEmp[n]=(byEmp[n]||0)+numHours(l.hours); }); });
+    var maxHrs = Math.max(1, Object.keys(byEmp).reduce(function(m,k){return Math.max(m,byEmp[k]);},0));
+    var empRows = Object.keys(byEmp).sort(function(a,b){return byEmp[b]-byEmp[a];});
+
+    var html = '<div class="card"><div class="section-title">This week</div><p class="section-sub">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</p>';
+    html += '<div class="stat-grid">';
+    html += statTile(weekLogs.length, "Updates logged");
+    html += statTile(totalHours.toFixed(1), "Hours logged");
+    html += statTile(openCount, "Open jobs");
+    html += statTile(activeCrew().length, "Active crew");
+    html += '</div></div>';
+
+    html += '<div class="card"><div class="section-title" style="font-size:17px">Hours by crew member</div>';
+    if (empRows.length===0){ html += '<p class="empty-note">No jobs logged this week yet.</p>'; }
+    else { empRows.forEach(function(name){ var v=byEmp[name]; html += '<div class="bar-row"><div class="bar-name">'+esc(name)+'</div><div class="bar-track"><div class="bar-fill" style="width:'+(v/maxHrs*100)+'%"></div></div><div class="bar-val mono">'+v.toFixed(1)+'h</div></div>'; }); }
+    html += '</div>';
+
+    var followups = openJobs().slice(0,6);
+    html += '<div class="card"><div class="section-title" style="font-size:17px">Open jobs needing follow-up</div>';
+    if (followups.length===0){ html += '<p class="empty-note">Nothing outstanding.</p>'; }
+    else { followups.forEach(function(j){ html += renderJobCard(j, {admin:false}); }); }
+    html += '</div>';
+    return html;
+  }
+
+  function statTile(num,label){ return '<div class="stat-tile"><div class="num mono">'+num+'</div><div class="label">'+esc(label)+'</div></div>'; }
+
+  function renderJobCard(j, opts){
+    opts = opts || {};
+    var logs = jobLogsFor(j.id);
+    var editingDetails = state.editingJobId === j.id;
+    var html = '<div class="job-card">';
+
+    if (editingDetails){
+      html += '<form id="job-details-form" data-job-id="'+esc(j.id)+'">';
+      html += field("Venue / job site", '<input type="text" name="venue" value="'+esc(j.venue||"")+'" required>');
+      html += field("Job description", '<textarea name="jobDescription" required>'+esc(j.jobDescription||"")+'</textarea>');
+      html += '<div class="field"><label>Job type</label><div class="seg" data-seg="jobTypeEdit">' +
+        '<button type="button" data-val="new" class="'+(j.jobType!=="returning"?"on":"")+'">New job</button>' +
+        '<button type="button" data-val="returning" class="'+(j.jobType==="returning"?"on":"")+'">Returning job</button></div></div>';
+      html += field("Purchase order (optional)", '<input type="text" name="poNumber" value="'+esc(j.poNumber||"")+'">');
+      html += '<div style="display:flex; gap:8px"><button type="submit" class="btn btn-primary" style="flex:1">Save details</button><button type="button" class="btn btn-outline" data-action="cancel-edit-job">Cancel</button></div>';
+      html += '</form>';
+      html += '</div>';
+      return html;
+    }
+
+    html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div><div class="log-desc">'+esc(j.jobDescription||"")+'</div>';
+    html += '<div class="log-meta">'+(j.jobType==="returning"?"Returning job":"New job")+(j.poNumber?' &middot; PO '+esc(j.poNumber):'')+(j.client?' &middot; '+esc(j.client):'')+'</div></div>';
+    html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:5px;"><span class="pill '+(j.open===false?"pill-neutral":"pill-warning")+'">'+(j.open===false?"Closed":"Open")+'</span></div></div>';
+    if (j.assignedEmployees && j.assignedEmployees.length){
+      html += '<div class="chips" style="margin-top:8px">'+j.assignedEmployees.map(function(n){return '<span class="pill pill-neutral">'+esc(n)+'</span>';}).join("")+'</div>';
+    }
+    if (opts.admin){
+      html += '<div class="field" style="margin-top:10px; margin-bottom:4px"><label>Status</label><div class="seg seg-status" data-job-status="'+esc(j.id)+'">' +
+        ["quoted","in-process","completed","invoiced"].map(function(s){ return '<button type="button" data-val="'+s+'" class="'+(j.status===s?"on":"")+'">'+statusLabel(s)+'</button>'; }).join("") +
+      '</div></div>';
+    } else {
+      html += '<div class="log-foot"><span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span></div>';
+    }
+    html += '<div class="log-foot">';
+    if (opts.employeeView){ html += '<button type="button" class="btn btn-outline btn-sm" data-add-update="'+esc(j.id)+'">Add update</button>'; }
+    if (opts.admin || opts.employeeView){ html += '<button type="button" class="btn btn-ghost btn-sm" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">Edit job details</button>'; }
+    html += '</div>';
+    if (logs.length){
+      html += '<div class="timeline">';
+      logs.slice(0,6).forEach(function(l){
+        html += '<div class="timeline-item"><strong>'+fmtDay(l.date)+'</strong> &middot; <span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span> &middot; '+esc(l.submittedBy||"")+
+          (l.completed ? ' &middot; <span class="pill pill-success" style="padding:2px 7px">Completed</span>' : ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>') +
+          (l.materials ? '<br><span class="hint">Materials: '+esc(l.materials)+'</span>' : '') +
+          (!l.completed && l.remainingWork ? '<br><span class="hint">Still to do: '+esc(l.remainingWork)+'</span>' : '') +
+          '<br><button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0" data-edit-log="'+esc(l.id)+'">Edit this entry</button>' +
+        '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderJobsAdmin(){
+    var filters = ["all","open","closed"];
+    var list = state.jobs.slice();
+    if (state.jobsStatusFilter === "open") list = list.filter(function(j){return j.open!==false;});
+    if (state.jobsStatusFilter === "closed") list = list.filter(function(j){return j.open===false;});
+
+    var html = '<div class="card">';
+    html += '<div class="section-title">Jobs</div><p class="section-sub">Every job, its status, and who\'s on it.</p>';
+    html += '<div class="seg" style="margin-bottom:14px" data-seg="jobsFilter">' +
+      filters.map(function(f){ return '<button type="button" data-val="'+f+'" class="'+(state.jobsStatusFilter===f?"on":"")+'">'+f.charAt(0).toUpperCase()+f.slice(1)+'</button>'; }).join("") +
+    '</div>';
+    if (list.length===0){ html += '<p class="empty-note">No jobs yet.</p>'; }
+    else { list.forEach(function(j){ html += renderJobCard(j, {admin:true}); }); }
+    html += '</div>';
+    return html;
+  }
+
+  function renderTimesheets(){
+    var crew = activeCrew();
+    var sel = state.tsEmployee || (crew[0] && crew[0].name) || null;
+    var html = '<div class="card">';
+    html += '<div class="section-title">Timesheets</div><p class="section-sub">Pick a crew member to see their hours by week.</p>';
+    html += '<div class="chips" style="margin-bottom:14px">' + crew.map(function(c){
+      return '<button class="chip'+(sel===c.name?" on":"")+'" data-ts-emp="'+esc(c.name)+'">'+esc(c.name)+'</button>';
+    }).join("") + '</div>';
+
+    if (!sel){ html += '<p class="empty-note">Add crew first.</p></div>'; return html; }
+
+    var wk = weekBounds(state.tsWeekOffset);
+    var logs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(sel) !== -1; });
+    var total = logs.reduce(function(s,l){return s+numHours(l.hours);},0);
+    var byDay = {}; logs.forEach(function(l){ (byDay[l.date]=byDay[l.date]||[]).push(l); });
+    var days = Object.keys(byDay).sort().reverse();
+
+    html += '<div class="weeknav"><button data-ts-week="-1">&larr;</button><div class="label">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+' &middot; <span class="mono">'+total.toFixed(1)+'h</span></div><button data-ts-week="1">&rarr;</button></div>';
+
+    if (days.length===0){ html += '<p class="empty-note">No job sheets for '+esc(sel)+' this week.</p>'; }
+    else { days.forEach(function(d){ html += '<div class="day-heading">'+fmtDay(d)+'</div>'; byDay[d].forEach(function(l){ html += renderLogCard(l); }); }); }
+    html += '</div>';
+    return html;
+  }
+
+  function renderCrewView(){
+    var html = '<div class="card">';
+    html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px;"><div><div class="section-title">Crew roster</div><p class="section-sub">Employees log in with just their name. Managers set a PIN on first login, since they can see Management.</p></div>' +
+      '<button class="btn btn-outline btn-sm" data-action="toggle-crew-form">'+(state.crewFormOpen?"Close":"Add crew")+'</button></div>';
+    if (state.crewFormOpen){
+      html += '<form id="crew-form" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line)">';
+      html += '<div class="row2">';
+      html += field("Name", '<input type="text" name="name" placeholder="Full name" required>');
+      html += field("Email (optional)", '<input type="text" name="email" placeholder="name@hydraciv.com.au">');
+      html += '</div>';
+      html += '<div class="field"><label>Role</label><div class="seg" data-seg="crewRole">' +
+        '<button type="button" data-val="employee" class="'+(state.crewRole==="employee"?"on":"")+'">Employee</button>' +
+        '<button type="button" data-val="admin" class="'+(state.crewRole==="admin"?"on":"")+'">Manager</button>' +
+      '</div></div>';
+      html += '<button type="submit" class="btn btn-primary btn-block">Add to roster</button>';
+      html += '</form>';
+    }
+    html += '</div>';
+
+    html += '<div class="card">';
+    if (state.crew.length===0){ html += '<p class="empty-note">No crew added yet.</p>'; }
+    else {
+      state.crew.forEach(function(c){
+        var login = loginFor(c.id);
+        var pinPill = c.role==="admin" ? ((login && login.pin) ? '<span class="pill pill-success">PIN set</span>' : '<span class="pill pill-warning">Not set yet</span>') : "";
+        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(c.name)+' <span class="pill pill-neutral">'+(c.role==="admin"?"Manager":"Employee")+'</span>'+(c.active===false?' <span class="pill pill-neutral">inactive</span>':'')+'</div>' +
+          (c.email?'<div class="email">'+esc(c.email)+'</div>':'') + (pinPill?'<div style="margin-top:4px">'+pinPill+'</div>':'') + '</div>' +
+          '<div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">' +
+          '<button class="btn btn-outline btn-sm" data-crew-toggle="'+esc(c.id)+'">'+(c.active===false?"Reactivate":"Deactivate")+'</button>' +
+          ((c.role==="admin" && login && login.pin) ? '<button class="btn btn-ghost btn-sm" data-reset-pin="'+esc(c.id)+'" style="padding:2px 4px">Reset PIN</button>' : '') +
+          '</div></div>';
+      });
+    }
+    html += '</div>';
+    return html;
+  }
+
+  // ---------- events ----------
+  function bindEvents(){
+    root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editingJobId=null; render(); }); });
+    root.querySelectorAll("[data-mgmt]").forEach(function(b){ b.addEventListener("click", function(){ state.mgmtSub=b.getAttribute("data-mgmt"); render(); }); });
+
+    var logoutBtn = root.querySelector('[data-action="logout"]');
+    if (logoutBtn) logoutBtn.addEventListener("click", function(){ state.session=null; clearSession(); state.loginName=""; state.loginPin=""; render(); });
+
+    // setup form
+    var setupForm = document.getElementById("setup-form");
+    if (setupForm) setupForm.addEventListener("submit", onSubmitSetup);
+
+    // login
+    root.querySelectorAll("[data-login-name]").forEach(function(b){
+      b.addEventListener("click", function(){
+        var name = b.getAttribute("data-login-name");
+        var crewMember = activeCrew().filter(function(c){ return c.name === name; })[0];
+        if (crewMember && crewMember.role !== "admin"){
+          // Employees log straight in with a name tap — no PIN.
+          state.session = {id:crewMember.id, name:crewMember.name, role:"employee"};
+          saveSession(state.session);
+          state.loginName=""; render(); return;
+        }
+        state.loginName = name; state.loginError=""; state.pinError=""; render();
+      });
+    });
+    var loginForm = document.getElementById("login-form");
+    if (loginForm) loginForm.addEventListener("submit", onSubmitLogin);
+    var setpinForm = document.getElementById("setpin-form");
+    if (setpinForm) setpinForm.addEventListener("submit", onSubmitSetPin);
+
+    // job list actions
+    var newJobBtn = root.querySelector('[data-action="new-job"]');
+    if (newJobBtn) newJobBtn.addEventListener("click", function(){ state.logView="new"; state.formMsg=null; render(); });
+    root.querySelectorAll("[data-add-update]").forEach(function(b){ b.addEventListener("click", function(){ state.logView="update"; state.updateJobId=b.getAttribute("data-add-update"); state.formMsg=null; render(); }); });
+    var backBtn = root.querySelector('[data-action="back-to-list"]');
+    if (backBtn) backBtn.addEventListener("click", function(){ state.logView="list"; state.editLogId=null; render(); });
+    root.querySelectorAll("[data-edit-log]").forEach(function(b){ b.addEventListener("click", function(){ state.editLogId=b.getAttribute("data-edit-log"); state.formMsg=null; render(); }); });
+
+    // job details edit (venue/description/type/PO)
+    root.querySelectorAll('[data-action="edit-job-details"]').forEach(function(b){ b.addEventListener("click", function(){ state.editingJobId=b.getAttribute("data-job-id"); render(); }); });
+    var cancelEditJobBtn = root.querySelector('[data-action="cancel-edit-job"]');
+    if (cancelEditJobBtn) cancelEditJobBtn.addEventListener("click", function(){ state.editingJobId=null; render(); });
+    var jobDetailsForm = document.getElementById("job-details-form");
+    if (jobDetailsForm) jobDetailsForm.addEventListener("submit", onSubmitJobDetails);
+
+    // segmented controls (generic)
+    root.querySelectorAll("[data-seg]").forEach(function(seg){
+      var name = seg.getAttribute("data-seg");
+      seg.querySelectorAll("button").forEach(function(b){
+        b.addEventListener("click", function(){
+          seg.querySelectorAll("button").forEach(function(x){ x.classList.remove("on"); });
+          b.classList.add("on");
+          if (name === "completed"){
+            var ff = document.getElementById("followup-fields");
+            if (ff) ff.style.display = (b.getAttribute("data-val")==="no") ? "block" : "none";
+          }
+          if (name === "crewRole"){ state.crewRole = b.getAttribute("data-val"); }
+          if (name === "jobsFilter"){ state.jobsStatusFilter = b.getAttribute("data-val"); render(); }
+        });
+      });
+    });
+
+    root.querySelectorAll('[data-chips="employees"] .chip').forEach(function(b){ b.addEventListener("click", function(){ b.classList.toggle("on"); }); });
+
+    var jobForm = document.getElementById("job-form");
+    if (jobForm) jobForm.addEventListener("submit", onSubmitJobForm);
+
+    var crewForm = document.getElementById("crew-form");
+    if (crewForm) crewForm.addEventListener("submit", onSubmitCrew);
+    var crewToggleBtn = root.querySelector('[data-action="toggle-crew-form"]');
+    if (crewToggleBtn) crewToggleBtn.addEventListener("click", function(){ state.crewFormOpen=!state.crewFormOpen; state.crewRole="employee"; render(); });
+
+    root.querySelectorAll("[data-crew-toggle]").forEach(function(b){ b.addEventListener("click", function(){ toggleCrewActive(b.getAttribute("data-crew-toggle")); }); });
+    root.querySelectorAll("[data-reset-pin]").forEach(function(b){ b.addEventListener("click", function(){ resetPin(b.getAttribute("data-reset-pin")); }); });
+
+    root.querySelectorAll("[data-job-status]").forEach(function(seg){
+      seg.querySelectorAll("button").forEach(function(b){
+        b.addEventListener("click", function(){ setJobStatus(seg.getAttribute("data-job-status"), b.getAttribute("data-val")); });
+      });
+    });
+
+    root.querySelectorAll("[data-ts-emp]").forEach(function(b){ b.addEventListener("click", function(){ state.tsEmployee=b.getAttribute("data-ts-emp"); state.tsWeekOffset=0; render(); }); });
+    root.querySelectorAll("[data-ts-week]").forEach(function(b){ b.addEventListener("click", function(){ state.tsWeekOffset += parseInt(b.getAttribute("data-ts-week"),10); render(); }); });
+  }
+
+  function onSubmitSetup(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var pin = f.pin.value.trim(), pin2 = f.pin2.value.trim();
+    if (!/^[0-9]{4}$/.test(pin)){ state.setupError="PIN must be 4 digits."; render(); return; }
+    if (pin !== pin2){ state.setupError="PINs don't match."; render(); return; }
+    var name = f.name.value.trim();
+    db.collection("crew").add({name:name, email:f.email.value.trim(), role:"admin", active:true, createdAt:new Date().toISOString()})
+      .then(function(ref){
+        return db.collection("logins").doc(ref.id).set({pin:pin, pinSetAt:new Date().toISOString()}).then(function(){
+          state.session = {id:ref.id, name:name, role:"admin"};
+          saveSession(state.session);
+          toast("Manager account created");
+          render();
+        });
+      })
+      .catch(function(err){ state.setupError="Couldn't create that account. Try again."; render(); });
+  }
+
+  function onSubmitSetPin(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var pin = f.pin.value.trim(), pin2 = f.pin2.value.trim();
+    if (!/^[0-9]{4}$/.test(pin)){ state.pinError="PIN must be 4 digits."; render(); return; }
+    if (pin !== pin2){ state.pinError="PINs don't match."; render(); return; }
+    var crewMember = activeCrew().filter(function(c){ return c.name === state.loginName; })[0];
+    if (!crewMember) return;
+    db.collection("logins").doc(crewMember.id).set({pin:pin, pinSetAt:new Date().toISOString()})
+      .then(function(){
+        state.session = {id:crewMember.id, name:crewMember.name, role:crewMember.role||"employee"};
+        saveSession(state.session);
+        state.loginName=""; state.pinError="";
+        render();
+      })
+      .catch(function(){ state.pinError="Couldn't set your PIN — try again."; render(); });
+  }
+
+  function onSubmitLogin(e){
+    e.preventDefault();
+    var pin = e.target.pin.value.trim();
+    var crewMember = activeCrew().filter(function(c){ return c.name === state.loginName; })[0];
+    var login = crewMember ? loginFor(crewMember.id) : null;
+    if (!crewMember || !login || login.pin !== pin){
+      state.loginError="Wrong PIN. Try again, or ask your manager to reset it."; render(); return;
+    }
+    state.session = {id:crewMember.id, name:crewMember.name, role:crewMember.role||"employee"};
+    saveSession(state.session);
+    state.loginName=""; state.loginError="";
+    render();
+  }
+
+  function onSubmitJobForm(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var mode = f.getAttribute("data-mode");
+    var jobDescription = f.jobDescription.value.trim();
+    var date = f.date.value;
+    var hours = f.hours.value.trim();
+    var completed = root.querySelector('#job-form [data-seg="completed"] .on').getAttribute("data-val") === "yes";
+    var employees = Array.prototype.slice.call(root.querySelectorAll('#job-form [data-chips="employees"] .chip.on')).map(function(b){ return b.getAttribute("data-name"); });
+    var materials = f.materials.value.trim();
+    var estimatedReturn = f.estimatedReturn ? f.estimatedReturn.value : "";
+    var remainingWork = f.remainingWork ? f.remainingWork.value.trim() : "";
+
+    if (!jobDescription || !date || !hours || employees.length===0){
+      state.formMsg = {type:"error", text:"Please fill in the job description, date, hours and at least one crew member."};
+      render(); return;
+    }
+    if (!completed && !remainingWork){
+      state.formMsg = {type:"error", text:"Add what's still to do so the follow-up is clear."};
+      render(); return;
+    }
+
+    state.formBusy = true; render();
+
+    function recomputeJobOpen(jobId){
+      // Sort client-side instead of orderBy on the query — a where()+orderBy() on
+      // different fields needs a Firestore composite index, which this avoids.
+      return db.collection("job-logs").where("jobId","==",jobId).get().then(function(snap){
+        if (!snap.docs.length) return;
+        var docs = snap.docs.map(function(d){ return d.data(); });
+        docs.sort(function(a,b){ return (b.submittedAt||"").localeCompare(a.submittedAt||""); });
+        var latest = docs[0];
+        return db.collection("jobs").doc(jobId).update({open: !latest.completed, lastUpdatedAt: new Date().toISOString()});
+      });
+    }
+
+    function afterLog(jobId, venue){
+      var logBody = {
+        jobId: jobId, venue: venue, date: date, hours: hours, jobDescription: jobDescription,
+        materials: materials, completed: completed,
+        estimatedReturn: completed ? "" : estimatedReturn, remainingWork: completed ? "" : remainingWork,
+        employees: employees, submittedBy: state.session.name, submittedAt: new Date().toISOString(),
+      };
+      return db.collection("job-logs").add(logBody).then(function(){
+        return db.collection("jobs").doc(jobId).update({open: !completed, lastUpdatedAt: new Date().toISOString()});
+      });
+    }
+
+    var p;
+    if (mode === "new"){
+      var venue = f.venue.value.trim();
+      var jobType = root.querySelector('#job-form [data-seg="jobType"] .on').getAttribute("data-val");
+      if (!venue){ state.formBusy=false; state.formMsg={type:"error", text:"Add the venue / job site."}; render(); return; }
+      p = db.collection("jobs").add({
+        venue: venue, jobDescription: jobDescription, jobType: jobType, poNumber: f.poNumber ? f.poNumber.value : "",
+        assignedEmployees: employees, status: "in-process", open: true,
+        createdBy: state.session.name, createdAt: new Date().toISOString(),
+      }).then(function(ref){ return afterLog(ref.id, venue); });
+    } else if (mode === "edit"){
+      var editLogId = f.getAttribute("data-log-id");
+      var editJobId = f.getAttribute("data-job-id");
+      var patch = {
+        date: date, hours: hours, jobDescription: jobDescription, materials: materials, completed: completed,
+        estimatedReturn: completed ? "" : estimatedReturn, remainingWork: completed ? "" : remainingWork,
+        employees: employees, editedBy: state.session.name, editedAt: new Date().toISOString(),
+      };
+      p = db.collection("job-logs").doc(editLogId).update(patch).then(function(){ return recomputeJobOpen(editJobId); });
+    } else {
+      var jobId = f.getAttribute("data-job-id");
+      var job = state.jobs.filter(function(j){return j.id===jobId;})[0];
+      p = afterLog(jobId, job ? job.venue : "");
+    }
+
+    p.then(function(){
+      state.formBusy = false; state.logView = "list"; state.updateJobId = null; state.editLogId = null;
+      toast(mode === "edit" ? "Changes saved" : "Job sheet sent");
+      render();
+    }).catch(function(err){
+      state.formBusy = false;
+      state.formMsg = {type:"error", text:"Couldn't save that (" + (err && err.code || "error") + "). Try again."};
+      render();
+    });
+  }
+
+  function onSubmitCrew(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var name = f.name.value.trim();
+    if (!name) return;
+    db.collection("crew").add({name:name, email:f.email.value.trim(), role:state.crewRole, active:true, createdAt:new Date().toISOString()})
+      .then(function(){ state.crewFormOpen=false; toast(name+" added — they'll set their PIN on first login"); render(); })
+      .catch(function(){ toast("Couldn't add crew — manager access needed."); });
+  }
+
+  function toggleCrewActive(id){
+    if (!db) return;
+    var c = state.crew.filter(function(x){return x.id===id;})[0];
+    if (!c) return;
+    db.collection("crew").doc(id).update({active: c.active===false}).catch(function(){ toast("Couldn't update crew — manager access needed."); });
+  }
+
+  function resetPin(id){
+    if (!db) return;
+    db.collection("logins").doc(id).delete()
+      .then(function(){ toast("PIN cleared — they'll set a new one next login."); })
+      .catch(function(){ toast("Couldn't reset PIN."); });
+  }
+
+  function setJobStatus(jobId, status){
+    if (!db) return;
+    db.collection("jobs").doc(jobId).update({status:status}).catch(function(){ toast("Couldn't update status."); });
+  }
+
+  function onSubmitJobDetails(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var jobId = f.getAttribute("data-job-id");
+    var venue = f.venue.value.trim();
+    var jobDescription = f.jobDescription.value.trim();
+    if (!venue || !jobDescription) return;
+    var jobType = root.querySelector('#job-details-form [data-seg="jobTypeEdit"] .on').getAttribute("data-val");
+    db.collection("jobs").doc(jobId).update({
+      venue: venue, jobDescription: jobDescription, jobType: jobType, poNumber: f.poNumber.value.trim(),
+    }).then(function(){
+      state.editingJobId = null; toast("Job details updated"); render();
+    }).catch(function(){ toast("Couldn't save those details."); });
+  }
+
+  // ---------- boot ----------
+  var firebaseConfig = {
+    apiKey: "AIzaSyCjvoVYtyC4eXMGdWGe4xMq7Ot0IcCqyic",
+    authDomain: "hydraciv-crew.firebaseapp.com",
+    projectId: "hydraciv-crew",
+    storageBucket: "hydraciv-crew.firebasestorage.app",
+    messagingSenderId: "246283036612",
+    appId: "1:246283036612:web:ac7ef45aced2b43c50a691"
+  };
+
+  render();
+
+  (function(){
+    try{
+      firebase.initializeApp(firebaseConfig);
+    }catch(e){ dbStatus = "unavailable"; render(); return; }
+
+    firebase.auth().signInAnonymously().then(function(){
+      db = firebase.firestore();
+      dbStatus = "ready";
+
+      db.collection("crew").orderBy("createdAt","asc").onSnapshot(function(snap){
+        state.crew = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, function(){});
+
+      db.collection("logins").onSnapshot(function(snap){
+        state.logins = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, function(){});
+
+      db.collection("jobs").orderBy("createdAt","desc").limit(500).onSnapshot(function(snap){
+        state.jobs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, function(){});
+
+      db.collection("job-logs").orderBy("submittedAt","desc").limit(1000).onSnapshot(function(snap){
+        state.jobLogs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, function(){});
+
+      render();
+    }).catch(function(err){
+      dbStatus = "unavailable";
+      render();
+    });
+  })();
+})();
+</script>
+</body>
+</html>
