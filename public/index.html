@@ -4,6 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Hydraciv Crew Portal</title>
+
+<!-- Home-screen / PWA icon setup so "Add to Home Screen" looks like a real app -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#123f5c">
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="apple-touch-icon" sizes="152x152" href="/icons/icon-152.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Hydraciv Crew">
+<meta name="mobile-web-app-capable" content="yes">
+
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
   :root{
@@ -84,9 +98,10 @@
   .who{position:relative; text-align:right; flex-shrink:0;}
   .who .name{font-weight:600; font-size:13.5px; color:#fff;}
   .who .role{font-size:10.5px; color:#9fcbe3; text-transform:uppercase; letter-spacing:.06em;}
+  .who-actions{display:flex; gap:10px; justify-content:flex-end; margin-top:2px;}
   .who button{
     background:none; border:none; color:#bcdcef; font-size:12px; text-decoration:underline;
-    text-underline-offset:2px; cursor:pointer; padding:2px 0; margin-top:2px;
+    text-underline-offset:2px; cursor:pointer; padding:2px 0;
   }
   .sync-dot{display:inline-block; width:6px; height:6px; border-radius:50%; background:#7fd9a8; margin-right:5px; vertical-align:1px;}
   .sync-note{position:relative; font-size:11px; color:#a9c9dc; padding:10px 0 12px; display:flex; align-items:center;}
@@ -227,6 +242,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -254,6 +270,7 @@
     jobsStatusFilter: "all",
     crewFormOpen: false, crewRole: "employee",
     tsEmployee: null, tsWeekOffset: 0,
+    changePinOpen: false, changePinMsg: null,
   };
 
   function esc(s){
@@ -285,6 +302,68 @@
     toastHost.appendChild(el); setTimeout(function(){ el.remove(); }, 2600);
   }
 
+  // ---------- EmailJS: instant "job logged" notification to the office ----------
+  // Fill these in from your EmailJS account (emailjs.com) — see SETUP-EMAIL.md at the repo root
+  // for the exact steps (create account, add an email service, create one template, get keys).
+  var EMAILJS_PUBLIC_KEY  = "YOUR_EMAILJS_PUBLIC_KEY";
+  var EMAILJS_SERVICE_ID  = "YOUR_EMAILJS_SERVICE_ID";
+  var EMAILJS_TEMPLATE_ID = "YOUR_EMAILJS_TEMPLATE_ID";
+  var EMAILJS_OFFICE_EMAIL = "grace@hydraciv.com.au";
+  var emailjsReady = false;
+  try{
+    if (window.emailjs && EMAILJS_PUBLIC_KEY.indexOf("YOUR_") !== 0){
+      emailjs.init({publicKey: EMAILJS_PUBLIC_KEY});
+      emailjsReady = true;
+    }
+  }catch(e){}
+
+  // Shared branded shell so instant emails look like the rest of Hydraciv's mail.
+  function brandedEmailShell(parts){
+    return (
+      '<div style="background:#eef2f2;padding:24px 12px;font-family:\'Segoe UI\',-apple-system,Roboto,sans-serif;color:#16222b;">' +
+        '<div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #ccd7da;border-radius:10px;overflow:hidden;">' +
+          '<div style="background:#123f5c;color:#eef6fb;padding:20px 24px;">' +
+            '<div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#9fcbe3;margin:0 0 6px;font-family:monospace;">Hydraciv &middot; Crew Portal</div>' +
+            parts.header +
+          '</div>' +
+          '<div style="padding:20px 24px;">' + parts.body + '</div>' +
+          '<div style="padding:14px 24px 18px;border-top:1px solid #e2e9eb;font-size:12px;color:#7d8d94;">Auto-generated from the Hydraciv Crew Portal.</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function sendInstantJobEmail(j){
+    if (!emailjsReady){ console.warn("EmailJS isn't configured yet — skipping instant job email. See SETUP-EMAIL.md."); return; }
+    var statusHtml = j.completed
+      ? '<span style="display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:#e3f3ea;color:#2f8f5b;">Completed</span>'
+      : '<span style="display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:#faedd6;color:#b5791c;">Follow-up needed</span>';
+    var rows = [
+      ["Venue", j.venue], ["Description", j.jobDescription], ["Date", fmtDay(j.date)],
+      ["Hours", j.hours], ["Crew onsite", j.employees.join(", ")], ["Materials", j.materials || "—"],
+    ];
+    if (!j.completed){
+      rows.push(["Est. return", j.estimatedReturn ? fmtShort(j.estimatedReturn) : "—"]);
+      rows.push(["Still to do", j.remainingWork || "—"]);
+    }
+    var bodyHtml = '<div style="margin-bottom:14px">' + statusHtml + '</div><table style="width:100%;border-collapse:collapse;font-size:13.5px;">';
+    rows.forEach(function(r){
+      bodyHtml += '<tr><td style="padding:6px 10px 6px 0;color:#7d8d94;font-size:11px;text-transform:uppercase;letter-spacing:.04em;vertical-align:top;white-space:nowrap;">' + esc(r[0]) + '</td><td style="padding:6px 0;">' + esc(r[1]) + '</td></tr>';
+    });
+    bodyHtml += '</table>';
+
+    var subject = (j.isNew ? "New job logged — " : "Job update — ") + j.venue;
+    var headerHtml = '<h1 style="margin:0;font-size:22px;font-weight:800;color:#fff;">' + esc(j.isNew ? "New job logged" : "Job update") + '</h1>' +
+      '<p style="margin:6px 0 0;font-size:13px;color:#cfe6f4;">by ' + esc(j.submittedBy) + '</p>';
+
+    emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+      to_email: EMAILJS_OFFICE_EMAIL,
+      cc_email: "",
+      subject: subject,
+      html_body: brandedEmailShell({header: headerHtml, body: bodyHtml}),
+    }).catch(function(err){ console.warn("Instant job email failed to send:", err); });
+  }
+
   function activeCrew(){ return state.crew.filter(function(c){ return c.active !== false; }); }
   function isAdmin(){ return !!(state.session && state.session.role === "admin"); }
   function loginFor(crewId){ return state.logins.filter(function(l){ return l.id === crewId; })[0] || null; }
@@ -304,6 +383,8 @@
       html += renderSetupAdmin();
     } else if (!state.session){
       html += renderLogin();
+    } else if (state.changePinOpen){
+      html += renderChangePinView();
     } else if (state.editLogId){
       html += renderEditLogView();
     } else if (!isAdmin()){
@@ -322,7 +403,8 @@
   function renderHero(){
     var who = "";
     if (state.session){
-      who = '<div class="who"><div class="name">' + esc(state.session.name) + '</div><div class="role">' + (isAdmin()?"Manager":"Crew") + '</div><button data-action="logout">Log out</button></div>';
+      who = '<div class="who"><div class="name">' + esc(state.session.name) + '</div><div class="role">' + (isAdmin()?"Manager":"Crew") + '</div>' +
+        '<div class="who-actions"><button data-action="change-pin">Change PIN</button><button data-action="logout">Log out</button></div></div>';
     }
     var tabs = "";
     if (state.session && isAdmin()){
@@ -492,6 +574,21 @@
     if (!log){ return '<div class="card"><p class="empty-note">That entry isn\'t there anymore.</p><button type="button" class="btn btn-outline" data-action="back-to-list">&larr; Back</button></div>'; }
     var job = state.jobs.filter(function(j){ return j.id === log.jobId; })[0];
     return renderJobForm({mode:"edit", job:job, log:log});
+  }
+
+  function renderChangePinView(){
+    var html = '<div class="card center-card">';
+    html += '<button type="button" class="btn btn-ghost" data-action="close-change-pin" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    html += '<div class="section-title">Change your PIN</div>';
+    html += '<p class="section-sub">Enter your current PIN, then choose a new 4-digit PIN.</p>';
+    if (state.changePinMsg) html += '<div class="msg '+(state.changePinMsg.type==="error"?"msg-error":"msg-success")+'">'+esc(state.changePinMsg.text)+'</div>';
+    html += '<form id="change-pin-form">';
+    html += field("Current PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="currentPin" class="pin-input" placeholder="••••" autofocus required>');
+    html += field("New PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="newPin" class="pin-input" placeholder="••••" required>');
+    html += field("Confirm new PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="newPin2" class="pin-input" placeholder="••••" required>');
+    html += '<button type="submit" class="btn btn-primary btn-block" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Saving…":"Save new PIN")+'</button>';
+    html += '</form></div>';
+    return html;
   }
 
   function uniqueVenues(){
@@ -739,6 +836,13 @@
     var logoutBtn = root.querySelector('[data-action="logout"]');
     if (logoutBtn) logoutBtn.addEventListener("click", function(){ state.session=null; clearSession(); state.loginName=""; state.loginPin=""; render(); });
 
+    var changePinBtn = root.querySelector('[data-action="change-pin"]');
+    if (changePinBtn) changePinBtn.addEventListener("click", function(){ state.changePinOpen=true; state.changePinMsg=null; render(); });
+    var closeChangePinBtn = root.querySelector('[data-action="close-change-pin"]');
+    if (closeChangePinBtn) closeChangePinBtn.addEventListener("click", function(){ state.changePinOpen=false; state.changePinMsg=null; render(); });
+    var changePinForm = document.getElementById("change-pin-form");
+    if (changePinForm) changePinForm.addEventListener("submit", onSubmitChangePin);
+
     // setup form
     var setupForm = document.getElementById("setup-form");
     if (setupForm) setupForm.addEventListener("submit", onSubmitSetup);
@@ -863,6 +967,37 @@
     render();
   }
 
+  function onSubmitChangePin(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var currentPin = f.currentPin.value.trim();
+    var newPin = f.newPin.value.trim();
+    var newPin2 = f.newPin2.value.trim();
+    var login = loginFor(state.session.id);
+    if (!login || login.pin !== currentPin){
+      state.changePinMsg = {type:"error", text:"Current PIN is wrong."}; render(); return;
+    }
+    if (!/^[0-9]{4}$/.test(newPin)){
+      state.changePinMsg = {type:"error", text:"New PIN must be 4 digits."}; render(); return;
+    }
+    if (newPin !== newPin2){
+      state.changePinMsg = {type:"error", text:"New PINs don't match."}; render(); return;
+    }
+    state.formBusy = true; render();
+    db.collection("logins").doc(state.session.id).set({pin:newPin, pinSetAt:new Date().toISOString()})
+      .then(function(){
+        state.formBusy = false; state.changePinOpen = false; state.changePinMsg = null;
+        toast("PIN updated");
+        render();
+      })
+      .catch(function(){
+        state.formBusy = false;
+        state.changePinMsg = {type:"error", text:"Couldn't update your PIN — try again."};
+        render();
+      });
+  }
+
   function onSubmitJobForm(e){
     e.preventDefault();
     if (!db) return;
@@ -913,9 +1048,11 @@
     }
 
     var p;
+    var emailVenue = "";
     if (mode === "new"){
       var venue = f.venue.value.trim();
       if (!venue){ state.formBusy=false; state.formMsg={type:"error", text:"Add the venue / job site."}; render(); return; }
+      emailVenue = venue;
       p = db.collection("jobs").add({
         venue: venue, jobDescription: jobDescription,
         assignedEmployees: employees, status: "in-process", open: true,
@@ -933,12 +1070,21 @@
     } else {
       var jobId = f.getAttribute("data-job-id");
       var job = state.jobs.filter(function(j){return j.id===jobId;})[0];
-      p = afterLog(jobId, job ? job.venue : "");
+      emailVenue = job ? job.venue : "";
+      p = afterLog(jobId, emailVenue);
     }
 
     p.then(function(){
       state.formBusy = false; state.logView = "list"; state.updateJobId = null; state.editLogId = null;
       toast(mode === "edit" ? "Changes saved" : "Job sheet sent");
+      if (mode === "new" || mode === "update"){
+        sendInstantJobEmail({
+          isNew: mode === "new", venue: emailVenue, jobDescription: jobDescription,
+          date: date, hours: hours, completed: completed, materials: materials,
+          estimatedReturn: estimatedReturn, remainingWork: remainingWork,
+          employees: employees, submittedBy: state.session.name,
+        });
+      }
       render();
     }).catch(function(err){
       state.formBusy = false;
