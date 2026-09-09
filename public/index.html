@@ -365,10 +365,9 @@
       return '<button type="button" class="picker-btn'+(state.loginName===c.name?" sel":"")+'" data-login-name="'+esc(c.name)+'">'+esc(c.name)+'</button>';
     }).join("") + '</div></div>';
 
-    // Employees log in with just a name tap — only manager accounts need a PIN.
+    // Everyone — crew and managers alike — sets a PIN on first login.
     if (state.loginName){
       var crewMember = activeCrew().filter(function(c){ return c.name === state.loginName; })[0];
-      if (crewMember && crewMember.role !== "admin"){ return html + '</div>'; }
       var login = crewMember ? loginFor(crewMember.id) : null;
       if (!login || !login.pin){
         html += '<div class="msg msg-info">First time logging in — set a 4-digit PIN you\'ll use from now on.</div>';
@@ -404,20 +403,37 @@
       if (job){ html += renderJobForm({mode:"update", job:job}); return html + renderRecentForMe(me); }
     }
 
-    var open = openJobs();
     html += '<div class="card">';
-    html += '<div class="section-title">Your open jobs</div>';
+    html += '<div class="section-title">Your jobs</div>';
     html += '<p class="section-sub">Not finished yet? Add an update instead of starting a new one.</p>';
-    if (open.length === 0){
-      html += '<p class="empty-note">No open jobs right now.</p>';
+    html += '<button class="btn btn-primary btn-block" style="margin-bottom:14px" data-action="new-job">Start a new job</button>';
+    var mine = myJobs(me);
+    if (mine.length === 0){
+      html += '<p class="empty-note">No jobs logged yet.</p>';
     } else {
-      open.forEach(function(j){ html += renderJobCard(j, {employeeView:true}); });
+      mine.forEach(function(j){ html += renderJobCard(j, {employeeView:true}); });
     }
-    html += '<button class="btn btn-primary btn-block" style="margin-top:14px" data-action="new-job">Start a new job</button>';
     html += '</div>';
-
-    html += renderRecentForMe(me);
     return html;
+  }
+
+  // All jobs this person has been on, one card per job (latest status), open/follow-up-needed first.
+  function myJobs(me){
+    var seenJobs = {}, mine = [];
+    state.jobLogs.forEach(function(l){
+      if (!l.employees || l.employees.indexOf(me) === -1) return;
+      var key = l.jobId || l.id;
+      if (seenJobs[key]) return;
+      seenJobs[key] = true;
+      var job = state.jobs.filter(function(j){ return j.id === key; })[0];
+      if (job) mine.push(job);
+    });
+    mine.sort(function(a,b){
+      var aOpen = a.open !== false, bOpen = b.open !== false;
+      if (aOpen !== bOpen) return aOpen ? -1 : 1;
+      return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||"");
+    });
+    return mine;
   }
 
   function renderJobForm(opts){
@@ -439,11 +455,6 @@
     if (opts.mode === "new"){
       html += field("Venue / job site", '<input type="text" name="venue" list="venue-list" placeholder="e.g. 14 Marlow St — pump station" required>' +
         '<datalist id="venue-list">'+uniqueVenues().map(function(v){return '<option value="'+esc(v)+'">';}).join("")+'</datalist>');
-      html += '<div class="field"><label>Job type</label><div class="seg" data-seg="jobType">' +
-        '<button type="button" data-val="new" class="on">New job</button><button type="button" data-val="returning">Returning job</button></div></div>';
-      html += field("Purchase order (optional)", '<select name="poNumber"><option value="">No PO</option>' +
-        state.jobs.filter(function(j){return j.poNumber;}).reduce(function(acc,j){ if(acc.indexOf(j.poNumber)===-1) acc.push(j.poNumber); return acc; },[]).map(function(p){return '<option value="'+esc(p)+'">'+esc(p)+'</option>';}).join("") +
-      '</select>');
     }
 
     html += field("Job description", '<textarea name="jobDescription" placeholder="What is/was the work" required>'+(isEdit?esc(log.jobDescription||""):"")+'</textarea>');
@@ -529,12 +540,13 @@
   // ---------- MANAGEMENT ----------
   function renderManagementTab(){
     var html = '<div class="subtabs">';
-    [["overview","Overview"],["jobs","Jobs"],["timesheets","Timesheets"],["crew","Crew"]].forEach(function(t){
+    [["overview","Overview"],["jobs","Jobs"],["invoiced","Invoiced"],["timesheets","Timesheets"],["crew","Crew"]].forEach(function(t){
       html += '<button data-mgmt="'+t[0]+'" class="'+(state.mgmtSub===t[0]?"on":"")+'">'+t[1]+'</button>';
     });
     html += '</div>';
     if (state.mgmtSub === "overview") html += renderOverview();
     else if (state.mgmtSub === "jobs") html += renderJobsAdmin();
+    else if (state.mgmtSub === "invoiced") html += renderInvoicedJobs();
     else if (state.mgmtSub === "timesheets") html += renderTimesheets();
     else html += renderCrewView();
     return html;
@@ -584,10 +596,9 @@
       html += '<form id="job-details-form" data-job-id="'+esc(j.id)+'">';
       html += field("Venue / job site", '<input type="text" name="venue" value="'+esc(j.venue||"")+'" required>');
       html += field("Job description", '<textarea name="jobDescription" required>'+esc(j.jobDescription||"")+'</textarea>');
-      html += '<div class="field"><label>Job type</label><div class="seg" data-seg="jobTypeEdit">' +
-        '<button type="button" data-val="new" class="'+(j.jobType!=="returning"?"on":"")+'">New job</button>' +
-        '<button type="button" data-val="returning" class="'+(j.jobType==="returning"?"on":"")+'">Returning job</button></div></div>';
-      html += field("Purchase order (optional)", '<input type="text" name="poNumber" value="'+esc(j.poNumber||"")+'">');
+      if (opts.admin){
+        html += field("Purchase order (optional)", '<input type="text" name="poNumber" value="'+esc(j.poNumber||"")+'">');
+      }
       html += '<div style="display:flex; gap:8px"><button type="submit" class="btn btn-primary" style="flex:1">Save details</button><button type="button" class="btn btn-outline" data-action="cancel-edit-job">Cancel</button></div>';
       html += '</form>';
       html += '</div>';
@@ -595,7 +606,10 @@
     }
 
     html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div><div class="log-desc">'+esc(j.jobDescription||"")+'</div>';
-    html += '<div class="log-meta">'+(j.jobType==="returning"?"Returning job":"New job")+(j.poNumber?' &middot; PO '+esc(j.poNumber):'')+(j.client?' &middot; '+esc(j.client):'')+'</div></div>';
+    var metaBits = [];
+    if (opts.admin && j.poNumber) metaBits.push('PO '+esc(j.poNumber));
+    if (j.client) metaBits.push(esc(j.client));
+    html += '<div class="log-meta">'+metaBits.join(' &middot; ')+'</div></div>';
     html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:5px;"><span class="pill '+(j.open===false?"pill-neutral":"pill-warning")+'">'+(j.open===false?"Closed":"Open")+'</span></div></div>';
     if (j.assignedEmployees && j.assignedEmployees.length){
       html += '<div class="chips" style="margin-top:8px">'+j.assignedEmployees.map(function(n){return '<span class="pill pill-neutral">'+esc(n)+'</span>';}).join("")+'</div>';
@@ -629,16 +643,26 @@
 
   function renderJobsAdmin(){
     var filters = ["all","open","closed"];
-    var list = state.jobs.slice();
+    var list = state.jobs.filter(function(j){ return j.status !== "invoiced"; });
     if (state.jobsStatusFilter === "open") list = list.filter(function(j){return j.open!==false;});
     if (state.jobsStatusFilter === "closed") list = list.filter(function(j){return j.open===false;});
 
     var html = '<div class="card">';
-    html += '<div class="section-title">Jobs</div><p class="section-sub">Every job, its status, and who\'s on it.</p>';
+    html += '<div class="section-title">Jobs</div><p class="section-sub">Every job, its status, and who\'s on it. Invoiced jobs move to their own tab.</p>';
     html += '<div class="seg" style="margin-bottom:14px" data-seg="jobsFilter">' +
       filters.map(function(f){ return '<button type="button" data-val="'+f+'" class="'+(state.jobsStatusFilter===f?"on":"")+'">'+f.charAt(0).toUpperCase()+f.slice(1)+'</button>'; }).join("") +
     '</div>';
     if (list.length===0){ html += '<p class="empty-note">No jobs yet.</p>'; }
+    else { list.forEach(function(j){ html += renderJobCard(j, {admin:true}); }); }
+    html += '</div>';
+    return html;
+  }
+
+  function renderInvoicedJobs(){
+    var list = state.jobs.filter(function(j){ return j.status === "invoiced"; });
+    var html = '<div class="card">';
+    html += '<div class="section-title">Invoiced</div><p class="section-sub">Jobs that have been invoiced — out of the way, but still here if you need them.</p>';
+    if (list.length===0){ html += '<p class="empty-note">Nothing invoiced yet.</p>'; }
     else { list.forEach(function(j){ html += renderJobCard(j, {admin:true}); }); }
     html += '</div>';
     return html;
@@ -671,13 +695,13 @@
 
   function renderCrewView(){
     var html = '<div class="card">';
-    html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px;"><div><div class="section-title">Crew roster</div><p class="section-sub">Employees log in with just their name. Managers set a PIN on first login, since they can see Management.</p></div>' +
+    html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px;"><div><div class="section-title">Crew roster</div><p class="section-sub">Everyone sets a 4-digit PIN on first login. An email on file is needed for reminders and any auto-sent job/timesheet emails to reach them.</p></div>' +
       '<button class="btn btn-outline btn-sm" data-action="toggle-crew-form">'+(state.crewFormOpen?"Close":"Add crew")+'</button></div>';
     if (state.crewFormOpen){
       html += '<form id="crew-form" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line)">';
       html += '<div class="row2">';
       html += field("Name", '<input type="text" name="name" placeholder="Full name" required>');
-      html += field("Email (optional)", '<input type="text" name="email" placeholder="name@hydraciv.com.au">');
+      html += field("Email", '<input type="email" name="email" placeholder="name@hydraciv.com.au" required>');
       html += '</div>';
       html += '<div class="field"><label>Role</label><div class="seg" data-seg="crewRole">' +
         '<button type="button" data-val="employee" class="'+(state.crewRole==="employee"?"on":"")+'">Employee</button>' +
@@ -693,12 +717,13 @@
     else {
       state.crew.forEach(function(c){
         var login = loginFor(c.id);
-        var pinPill = c.role==="admin" ? ((login && login.pin) ? '<span class="pill pill-success">PIN set</span>' : '<span class="pill pill-warning">Not set yet</span>') : "";
+        var pinPill = (login && login.pin) ? '<span class="pill pill-success">PIN set</span>' : '<span class="pill pill-warning">Not set yet</span>';
+        var emailPill = c.email ? '' : ' <span class="pill pill-warning">No email — reminders won\'t reach them</span>';
         html += '<div class="crew-row"><div class="info"><div class="name">'+esc(c.name)+' <span class="pill pill-neutral">'+(c.role==="admin"?"Manager":"Employee")+'</span>'+(c.active===false?' <span class="pill pill-neutral">inactive</span>':'')+'</div>' +
-          (c.email?'<div class="email">'+esc(c.email)+'</div>':'') + (pinPill?'<div style="margin-top:4px">'+pinPill+'</div>':'') + '</div>' +
+          (c.email?'<div class="email">'+esc(c.email)+'</div>':'') + '<div style="margin-top:4px">'+pinPill+emailPill+'</div></div>' +
           '<div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">' +
           '<button class="btn btn-outline btn-sm" data-crew-toggle="'+esc(c.id)+'">'+(c.active===false?"Reactivate":"Deactivate")+'</button>' +
-          ((c.role==="admin" && login && login.pin) ? '<button class="btn btn-ghost btn-sm" data-reset-pin="'+esc(c.id)+'" style="padding:2px 4px">Reset PIN</button>' : '') +
+          ((login && login.pin) ? '<button class="btn btn-ghost btn-sm" data-reset-pin="'+esc(c.id)+'" style="padding:2px 4px">Reset PIN</button>' : '') +
           '</div></div>';
       });
     }
@@ -722,13 +747,6 @@
     root.querySelectorAll("[data-login-name]").forEach(function(b){
       b.addEventListener("click", function(){
         var name = b.getAttribute("data-login-name");
-        var crewMember = activeCrew().filter(function(c){ return c.name === name; })[0];
-        if (crewMember && crewMember.role !== "admin"){
-          // Employees log straight in with a name tap — no PIN.
-          state.session = {id:crewMember.id, name:crewMember.name, role:"employee"};
-          saveSession(state.session);
-          state.loginName=""; render(); return;
-        }
         state.loginName = name; state.loginError=""; state.pinError=""; render();
       });
     });
@@ -897,10 +915,9 @@
     var p;
     if (mode === "new"){
       var venue = f.venue.value.trim();
-      var jobType = root.querySelector('#job-form [data-seg="jobType"] .on').getAttribute("data-val");
       if (!venue){ state.formBusy=false; state.formMsg={type:"error", text:"Add the venue / job site."}; render(); return; }
       p = db.collection("jobs").add({
-        venue: venue, jobDescription: jobDescription, jobType: jobType, poNumber: f.poNumber ? f.poNumber.value : "",
+        venue: venue, jobDescription: jobDescription,
         assignedEmployees: employees, status: "in-process", open: true,
         createdBy: state.session.name, createdAt: new Date().toISOString(),
       }).then(function(ref){ return afterLog(ref.id, venue); });
@@ -935,8 +952,9 @@
     if (!db) return;
     var f = e.target;
     var name = f.name.value.trim();
-    if (!name) return;
-    db.collection("crew").add({name:name, email:f.email.value.trim(), role:state.crewRole, active:true, createdAt:new Date().toISOString()})
+    var email = f.email.value.trim();
+    if (!name || !email) return;
+    db.collection("crew").add({name:name, email:email, role:state.crewRole, active:true, createdAt:new Date().toISOString()})
       .then(function(){ state.crewFormOpen=false; toast(name+" added — they'll set their PIN on first login"); render(); })
       .catch(function(){ toast("Couldn't add crew — manager access needed."); });
   }
@@ -968,10 +986,9 @@
     var venue = f.venue.value.trim();
     var jobDescription = f.jobDescription.value.trim();
     if (!venue || !jobDescription) return;
-    var jobType = root.querySelector('#job-details-form [data-seg="jobTypeEdit"] .on').getAttribute("data-val");
-    db.collection("jobs").doc(jobId).update({
-      venue: venue, jobDescription: jobDescription, jobType: jobType, poNumber: f.poNumber.value.trim(),
-    }).then(function(){
+    var patch = {venue: venue, jobDescription: jobDescription};
+    if (f.poNumber) patch.poNumber = f.poNumber.value.trim();
+    db.collection("jobs").doc(jobId).update(patch).then(function(){
       state.editingJobId = null; toast("Job details updated"); render();
     }).catch(function(){ toast("Couldn't save those details."); });
   }
