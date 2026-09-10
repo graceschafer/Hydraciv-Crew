@@ -587,12 +587,9 @@
     html += field("Hours worked", '<input type="text" name="hours" value="'+esc(isEdit?(log.hours||""):"")+'" placeholder="e.g. 6.5 or 6.5h" required>');
     html += '</div>';
 
-    var selectedEmployees = isEdit ? (log.employees||[]) : [state.session.name];
-    html += '<div class="field"><label>Who was onsite</label><div class="chips" data-chips="employees">' +
-      activeCrew().map(function(c){
-        var on = selectedEmployees.indexOf(c.name) !== -1;
-        return '<button type="button" class="chip'+(on?" on":"")+'" data-name="'+esc(c.name)+'">'+esc(c.name)+'</button>';
-      }).join("") + '</div></div>';
+    var loggedUnder = isEdit ? (log.submittedBy || (log.employees && log.employees[0]) || "") : state.session.name;
+    html += '<div class="field"><label>Logged under</label><p class="hint" style="margin:2px 0 0">'+esc(loggedUnder)+'\'s timesheet. Ticking or typing someone else\'s name here won\'t add hours to their sheet.</p></div>';
+    html += field("Anyone else onsite? (optional)", '<input type="text" name="alsoOnsite" value="'+(isEdit?esc(log.alsoOnsite||""):"")+'" placeholder="e.g. Charlotte, Bob">');
 
     html += field("Materials used", '<textarea name="materials" placeholder="e.g. 2x 25mm ball valves, 10m copper pipe">'+(isEdit?esc(log.materials||""):"")+'</textarea>');
 
@@ -784,6 +781,7 @@
         html += '<div class="timeline-item"><strong>'+fmtDay(l.date)+'</strong> &middot; <span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span> &middot; '+esc(l.submittedBy||"")+
           (l.completed ? ' &middot; <span class="pill pill-success" style="padding:2px 7px">Completed</span>' : ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>') +
           (l.materials ? '<br><span class="hint">Materials: '+esc(l.materials)+'</span>' : '') +
+          (l.alsoOnsite ? '<br><span class="hint">Also onsite: '+esc(l.alsoOnsite)+'</span>' : '') +
           (!l.completed && l.remainingWork ? '<br><span class="hint">Still to do: '+esc(l.remainingWork)+'</span>' : '') +
           '<br><button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0" data-edit-log="'+esc(l.id)+'">Edit this entry</button>' +
         '</div>';
@@ -869,7 +867,7 @@
       if (hay.indexOf(q) !== -1) return true;
       var logs = logsByJob[j.id] || [];
       return logs.some(function(l){
-        var lhay = [l.materials, l.remainingWork, l.submittedBy, (l.employees||[]).join(" ")].join(" ").toLowerCase();
+        var lhay = [l.materials, l.remainingWork, l.submittedBy, l.alsoOnsite, (l.employees||[]).join(" ")].join(" ").toLowerCase();
         return lhay.indexOf(q) !== -1;
       });
     }
@@ -1020,6 +1018,7 @@
       var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
       var extra = "";
       if (l.materials) extra += '<div class="p-meta">Materials: '+esc(l.materials)+'</div>';
+      if (l.alsoOnsite) extra += '<div class="p-meta">Also onsite: '+esc(l.alsoOnsite)+'</div>';
       if (!l.completed && l.remainingWork) extra += '<div class="p-meta">Still to do: '+esc(l.remainingWork)+'</div>';
       return '<div class="p-row"><div><strong>'+fmtDay(l.date)+'</strong> &middot; '+esc(l.submittedBy||"")+
         (l.completed ? '' : ' <span class="p-flag">(follow-up needed)</span>') + extra +
@@ -1140,8 +1139,6 @@
         });
       });
     });
-
-    root.querySelectorAll('[data-chips="employees"] .chip').forEach(function(b){ b.addEventListener("click", function(){ b.classList.toggle("on"); }); });
 
     var jobForm = document.getElementById("job-form");
     if (jobForm) jobForm.addEventListener("submit", onSubmitJobForm);
@@ -1274,13 +1271,14 @@
     var date = f.date.value;
     var hours = f.hours.value.trim();
     var completed = root.querySelector('#job-form [data-seg="completed"] .on').getAttribute("data-val") === "yes";
-    var employees = Array.prototype.slice.call(root.querySelectorAll('#job-form [data-chips="employees"] .chip.on')).map(function(b){ return b.getAttribute("data-name"); });
+    var employees = [state.session.name];
+    var alsoOnsite = f.alsoOnsite ? f.alsoOnsite.value.trim() : "";
     var materials = f.materials.value.trim();
     var estimatedReturn = f.estimatedReturn ? f.estimatedReturn.value : "";
     var remainingWork = f.remainingWork ? f.remainingWork.value.trim() : "";
 
-    if (!jobDescription || !date || !hours || employees.length===0){
-      state.formMsg = {type:"error", text:"Please fill in the job description, date, hours and at least one crew member."};
+    if (!jobDescription || !date || !hours){
+      state.formMsg = {type:"error", text:"Please fill in the job description, date and hours."};
       render(); return;
     }
     if (!completed && !remainingWork){
@@ -1305,12 +1303,18 @@
     function afterLog(jobId, venue){
       var logBody = {
         jobId: jobId, venue: venue, date: date, hours: hours, jobDescription: jobDescription,
-        materials: materials, completed: completed,
+        materials: materials, completed: completed, alsoOnsite: alsoOnsite,
         estimatedReturn: completed ? "" : estimatedReturn, remainingWork: completed ? "" : remainingWork,
         employees: employees, submittedBy: state.session.name, submittedAt: new Date().toISOString(),
       };
       return db.collection("job-logs").add(logBody).then(function(){
-        return db.collection("jobs").doc(jobId).update({open: !completed, lastUpdatedAt: new Date().toISOString()});
+        // Keep the job's assignedEmployees up to date with everyone who's actually
+        // logged a visit to it (not just whoever created it) — arrayUnion so this
+        // never duplicates or overwrites earlier names.
+        return db.collection("jobs").doc(jobId).update({
+          open: !completed, lastUpdatedAt: new Date().toISOString(),
+          assignedEmployees: firebase.firestore.FieldValue.arrayUnion(state.session.name)
+        });
       });
     }
 
@@ -1331,9 +1335,9 @@
       var editLogId = f.getAttribute("data-log-id");
       var editJobId = f.getAttribute("data-job-id");
       var patch = {
-        date: date, hours: hours, jobDescription: jobDescription, materials: materials, completed: completed,
+        date: date, hours: hours, jobDescription: jobDescription, materials: materials, completed: completed, alsoOnsite: alsoOnsite,
         estimatedReturn: completed ? "" : estimatedReturn, remainingWork: completed ? "" : remainingWork,
-        employees: employees, editedBy: state.session.name, editedAt: new Date().toISOString(),
+        editedBy: state.session.name, editedAt: new Date().toISOString(),
       };
       p = db.collection("job-logs").doc(editLogId).update(patch).then(function(){ return recomputeJobOpen(editJobId); });
     } else {
