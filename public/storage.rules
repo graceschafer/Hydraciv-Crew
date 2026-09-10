@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Job photos, uploaded by crew from the job form. Anyone who has loaded the crew
+    // portal (anonymous auth) can upload and view — same trust model as Firestore above.
+    match /job-photos/{jobId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 8 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if false;
+    }
+
+    // Nothing else in the bucket is accessible.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
