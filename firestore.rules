@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Anyone using the app signs in anonymously first (see public/index.html), so this
+    // just means "loaded the app" — it blocks random scripts/tools that hit Firestore's
+    // API directly without ever loading the page. It does NOT distinguish manager vs
+    // crew — the app has no per-user identity beyond the shared anonymous auth, so that
+    // distinction still lives only in the app's UI, same as before these rules existed.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isNonEmptyString(v) {
+      return v is string && v.size() > 0 && v.size() < 2000;
+    }
+
+    // invoiceAmount is optional — this only checks its *shape* when it's present at all.
+    function isValidInvoiceAmount() {
+      return !('invoiceAmount' in request.resource.data)
+        || request.resource.data.invoiceAmount == null
+        || (request.resource.data.invoiceAmount is number && request.resource.data.invoiceAmount >= 0);
+    }
+
+    // ---------- crew ----------
+    match /crew/{crewId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && isNonEmptyString(request.resource.data.name)
+        && request.resource.data.role in ['admin', 'employee'];
+      allow update: if signedIn()
+        && isNonEmptyString(request.resource.data.name)
+        && request.resource.data.role in ['admin', 'employee'];
+      allow delete: if false;
+    }
+
+    // ---------- logins (PINs) ----------
+    // Note: the app currently reads this whole collection client-side to check PINs at
+    // login, so these rules can enforce PIN *shape* but can't make PINs secret from
+    // anyone who loads the crew portal — that would need PIN checking to move behind a
+    // Cloud Function instead. Flagging this as a separate follow-up, not fixed by rules alone.
+    match /logins/{loginId} {
+      allow read: if signedIn();
+      allow write: if signedIn()
+        && request.resource.data.pin is string
+        && request.resource.data.pin.matches('^[0-9]{4}$');
+      allow delete: if signedIn();
+    }
+
+    // ---------- jobs ----------
+    match /jobs/{jobId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && isNonEmptyString(request.resource.data.venue)
+        && isNonEmptyString(request.resource.data.jobDescription);
+      // Venue must stay filled in on every update too, not just at creation —
+      // this is the piece Grace specifically asked to keep enforced.
+      allow update: if signedIn()
+        && isNonEmptyString(request.resource.data.venue)
+        && isValidInvoiceAmount();
+      allow delete: if false;
+    }
+
+    // ---------- job-logs ----------
+    match /job-logs/{logId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && isNonEmptyString(request.resource.data.jobId)
+        && isNonEmptyString(request.resource.data.venue)
+        && request.resource.data.employees is list
+        && request.resource.data.employees.size() > 0;
+      allow update: if signedIn()
+        && isNonEmptyString(request.resource.data.jobId)
+        && isNonEmptyString(request.resource.data.venue);
+      allow delete: if false;
+    }
+  }
+}
