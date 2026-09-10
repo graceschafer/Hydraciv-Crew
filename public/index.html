@@ -737,6 +737,7 @@
       html += field("Venue / job site", '<input type="text" name="venue" value="'+esc(j.venue||"")+'" required>');
       html += field("Job description", '<textarea name="jobDescription" required>'+esc(j.jobDescription||"")+'</textarea>');
       if (opts.admin){
+        html += field("VTASK number (optional)", '<input type="text" name="vtask" value="'+esc(j.vtask||"")+'">');
         html += field("Purchase order (optional)", '<input type="text" name="poNumber" value="'+esc(j.poNumber||"")+'">');
         html += field("Invoice amount ($, optional)", '<input type="number" name="invoiceAmount" step="0.01" min="0" placeholder="e.g. 450.00" value="'+(j.invoiceAmount!=null?esc(j.invoiceAmount):"")+'">');
       }
@@ -748,6 +749,7 @@
 
     html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div><div class="log-desc">'+esc(j.jobDescription||"")+'</div>';
     var metaBits = [];
+    if (opts.admin && j.vtask) metaBits.push('VTASK '+esc(j.vtask));
     if (opts.admin && j.poNumber) metaBits.push('PO '+esc(j.poNumber));
     if (j.client) metaBits.push(esc(j.client));
     html += '<div class="log-meta">'+metaBits.join(' &middot; ')+'</div></div>';
@@ -863,7 +865,7 @@
     state.jobLogs.forEach(function(l){ (logsByJob[l.jobId] = logsByJob[l.jobId] || []).push(l); });
 
     function jobMatches(j){
-      var hay = [j.venue, j.jobDescription, j.poNumber, j.client, (j.assignedEmployees||[]).join(" ")].join(" ").toLowerCase();
+      var hay = [j.venue, j.jobDescription, j.vtask, j.poNumber, j.client, (j.assignedEmployees||[]).join(" ")].join(" ").toLowerCase();
       if (hay.indexOf(q) !== -1) return true;
       var logs = logsByJob[j.id] || [];
       return logs.some(function(l){
@@ -1008,6 +1010,7 @@
   function buildJobPrintHTML(j){
     var logs = jobLogsFor(j.id).slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
     var metaBits = [];
+    if (j.vtask) metaBits.push("VTASK " + esc(j.vtask));
     if (j.poNumber) metaBits.push("PO " + esc(j.poNumber));
     if (j.client) metaBits.push(esc(j.client));
     metaBits.push("Status: " + esc(statusLabel(j.status)));
@@ -1399,6 +1402,7 @@
     var jobDescription = f.jobDescription.value.trim();
     if (!venue || !jobDescription) return;
     var patch = {venue: venue, jobDescription: jobDescription};
+    if (f.vtask) patch.vtask = f.vtask.value.trim();
     if (f.poNumber) patch.poNumber = f.poNumber.value.trim();
     if (f.invoiceAmount){
       var amt = f.invoiceAmount.value.trim();
