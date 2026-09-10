@@ -251,12 +251,6 @@
   #print-area .p-foot{margin-top:24px; font-size:11.5px; color:#9aa7ac;}
   #print-area .p-flag{color:#b5791c; font-weight:600;}
 
-  .photo-preview{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;}
-  .photo-preview .photo-thumb{width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line);}
-  .photo-preview .photo-thumb-wrap{position:relative;}
-  .log-photos{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
-  .log-photos a{display:block;}
-  .log-photos img{width:56px; height:56px; object-fit:cover; border-radius:7px; border:1px solid var(--line);}
 </style>
 </head>
 <body>
@@ -268,7 +262,6 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 (function(){
@@ -278,7 +271,6 @@
   var root = document.getElementById("root");
   var toastHost = document.getElementById("toast-host");
   var db = null;
-  var storage = null;
   var dbStatus = "loading"; // loading | ready | unavailable
 
   function loadSession(){
@@ -581,6 +573,11 @@
     if (opts.mode === "new"){
       html += field("Venue / job site", '<input type="text" name="venue" list="venue-list" placeholder="e.g. 14 Marlow St — pump station" required>' +
         '<datalist id="venue-list">'+uniqueVenues().map(function(v){return '<option value="'+esc(v)+'">';}).join("")+'</datalist>');
+      html += '<div class="field"><label>Client</label><div class="seg" data-seg="client">' +
+        ["ALH","Pubco/Supreme","MRC/Pegasus","Black Rhino","Other","Unsure"].map(function(c){
+          return '<button type="button" data-val="'+esc(c)+'">'+esc(c)+'</button>';
+        }).join("") +
+      '</div></div>';
     }
 
     html += field("Job description", '<textarea name="jobDescription" placeholder="What is/was the work" required>'+(isEdit?esc(log.jobDescription||""):"")+'</textarea>');
@@ -598,11 +595,6 @@
       }).join("") + '</div></div>';
 
     html += field("Materials used", '<textarea name="materials" placeholder="e.g. 2x 25mm ball valves, 10m copper pipe">'+(isEdit?esc(log.materials||""):"")+'</textarea>');
-
-    html += '<div class="field"><label>Photos (optional)</label>' +
-      '<input type="file" id="photo-input" name="photos" accept="image/*" multiple capture="environment">' +
-      '<div id="photo-preview" class="photo-preview"></div>' +
-    '</div>';
 
     var completedVal = isEdit ? !!log.completed : true;
     html += '<div class="field"><label>Job status</label><div class="seg" data-seg="completed">' +
@@ -667,14 +659,6 @@
     return html;
   }
 
-  // Small thumbnail strip for a log entry's photos, each linking to the full-size image.
-  function renderLogPhotos(l){
-    if (!l.photos || !l.photos.length) return "";
-    return '<div class="log-photos">' + l.photos.map(function(url){
-      return '<a href="'+esc(url)+'" target="_blank" rel="noopener"><img src="'+esc(url)+'" alt="Job photo"></a>';
-    }).join("") + '</div>';
-  }
-
   function renderLogCard(l, opts){
     opts = opts || {};
     var statusPill = l.completed ? '<span class="pill pill-success">Completed</span>' : '<span class="pill pill-warning">Follow-up needed</span>';
@@ -684,7 +668,6 @@
     html += '<div style="text-align:right">'+statusPill+'</div></div>';
     if (l.materials){ html += '<div class="log-body"><strong>Materials:</strong> '+esc(l.materials)+'</div>'; }
     if (!l.completed){ html += '<div class="log-followup"><strong>Est. return:</strong> '+(l.estimatedReturn?fmtShort(l.estimatedReturn):"—")+'<br><strong>Still to do:</strong> '+esc(l.remainingWork||"—")+'</div>'; }
-    html += renderLogPhotos(l);
     html += '<div class="log-foot"><span class="hint">logged by '+esc(l.submittedBy||"")+' &middot; '+fmtTime(l.submittedAt)+'</span>';
     if (opts.editable){ html += '<button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" data-edit-log="'+esc(l.id)+'">Edit</button>'; }
     html += '</div>';
@@ -755,6 +738,7 @@
       html += field("Job description", '<textarea name="jobDescription" required>'+esc(j.jobDescription||"")+'</textarea>');
       if (opts.admin){
         html += field("Purchase order (optional)", '<input type="text" name="poNumber" value="'+esc(j.poNumber||"")+'">');
+        html += field("Invoice amount ($, optional)", '<input type="number" name="invoiceAmount" step="0.01" min="0" placeholder="e.g. 450.00" value="'+(j.invoiceAmount!=null?esc(j.invoiceAmount):"")+'">');
       }
       html += '<div style="display:flex; gap:8px"><button type="submit" class="btn btn-primary" style="flex:1">Save details</button><button type="button" class="btn btn-outline" data-action="cancel-edit-job">Cancel</button></div>';
       html += '</form>';
@@ -767,7 +751,16 @@
     if (opts.admin && j.poNumber) metaBits.push('PO '+esc(j.poNumber));
     if (j.client) metaBits.push(esc(j.client));
     html += '<div class="log-meta">'+metaBits.join(' &middot; ')+'</div></div>';
-    html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:5px;"><span class="pill '+(j.open===false?"pill-neutral":"pill-warning")+'">'+(j.open===false?"Closed":"Open")+'</span></div></div>';
+    var priceBadge = "";
+    if (opts.admin){
+      priceBadge = (j.invoiceAmount != null && j.invoiceAmount !== "")
+        ? '<button type="button" class="pill pill-success mono" style="border:none; cursor:pointer;" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">$'+Number(j.invoiceAmount).toFixed(2)+'</button>'
+        : '<button type="button" class="pill pill-neutral" style="border:1px dashed var(--line); background:transparent; cursor:pointer;" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">+ Add price</button>';
+    }
+    html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:5px;">' +
+      '<span class="pill '+(j.open===false?"pill-neutral":"pill-warning")+'">'+(j.open===false?"Closed":"Open")+'</span>' +
+      priceBadge +
+    '</div></div>';
     if (j.assignedEmployees && j.assignedEmployees.length){
       html += '<div class="chips" style="margin-top:8px">'+j.assignedEmployees.map(function(n){return '<span class="pill pill-neutral">'+esc(n)+'</span>';}).join("")+'</div>';
     }
@@ -790,7 +783,6 @@
           (l.completed ? ' &middot; <span class="pill pill-success" style="padding:2px 7px">Completed</span>' : ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>') +
           (l.materials ? '<br><span class="hint">Materials: '+esc(l.materials)+'</span>' : '') +
           (!l.completed && l.remainingWork ? '<br><span class="hint">Still to do: '+esc(l.remainingWork)+'</span>' : '') +
-          renderLogPhotos(l) +
           '<br><button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0" data-edit-log="'+esc(l.id)+'">Edit this entry</button>' +
         '</div>';
       });
@@ -807,10 +799,7 @@
     if (state.jobsStatusFilter === "closed") list = list.filter(function(j){return j.open===false;});
 
     var html = '<div class="card">';
-    html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">' +
-      '<div><div class="section-title">Jobs</div><p class="section-sub" style="margin-bottom:0">Every job, its status, and who\'s on it. Invoiced jobs move to their own tab.</p></div>' +
-      '<button type="button" class="btn btn-outline btn-sm" data-action="export-jobs-csv">Export CSV</button>' +
-    '</div>';
+    html += '<div><div class="section-title">Jobs</div><p class="section-sub" style="margin-bottom:0">Every job, its status, and who\'s on it. Invoiced jobs move to their own tab.</p></div>';
     html += '<div class="seg" style="margin:14px 0" data-seg="jobsFilter">' +
       filters.map(function(f){ return '<button type="button" data-val="'+f+'" class="'+(state.jobsStatusFilter===f?"on":"")+'">'+f.charAt(0).toUpperCase()+f.slice(1)+'</button>'; }).join("") +
     '</div>';
@@ -900,10 +889,7 @@
     var names = Object.keys(byEmp).sort();
 
     var html = '<div class="card">';
-    html += '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">' +
-      '<div><div class="section-title">Timesheets</div><p class="section-sub" style="margin-bottom:0">One block per crew member for the week below — hit Copy, then paste into an email.</p></div>' +
-      '<button type="button" class="btn btn-outline btn-sm" data-action="export-timesheets-csv">Export week (CSV)</button>' +
-    '</div>';
+    html += '<div><div class="section-title">Timesheets</div><p class="section-sub" style="margin-bottom:0">One block per crew member for the week below — hit Copy, then paste into an email.</p></div>';
     html += '<div class="weeknav" style="margin-top:14px"><button data-ts-week="-1">&larr;</button><div class="label">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div><button data-ts-week="1">&rarr;</button></div>';
     html += '</div>';
 
@@ -1026,6 +1012,7 @@
     if (j.client) metaBits.push(esc(j.client));
     metaBits.push("Status: " + esc(statusLabel(j.status)));
     if (j.assignedEmployees && j.assignedEmployees.length) metaBits.push("Assigned: " + j.assignedEmployees.map(esc).join(", "));
+    if (isAdmin() && j.invoiceAmount != null && j.invoiceAmount !== "") metaBits.push("Invoice: $" + Number(j.invoiceAmount).toFixed(2));
     var rows = logs.map(function(l){
       var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
       var extra = "";
@@ -1049,50 +1036,6 @@
     var j = state.jobs.filter(function(x){ return x.id === jobId; })[0];
     if (!j) return;
     openPrintArea(buildJobPrintHTML(j));
-  }
-
-  // ---------- CSV export ----------
-  function csvEscape(v){
-    var s = (v==null) ? "" : String(v);
-    if (/[",\n]/.test(s)) s = '"' + s.replace(/"/g,'""') + '"';
-    return s;
-  }
-  function downloadCSV(filename, headers, rows){
-    var lines = [headers.map(csvEscape).join(",")];
-    rows.forEach(function(r){ lines.push(r.map(csvEscape).join(",")); });
-    var csv = lines.join("\r\n");
-    var blob = new Blob([csv], {type: "text/csv;charset=utf-8;"});
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
-    toast("Downloading " + filename);
-  }
-
-  function exportJobsCSV(){
-    var headers = ["Venue","Description","Status","Open","PO Number","Assigned Employees","Created By","Created At","Last Updated"];
-    var rows = state.jobs.map(function(j){
-      return [
-        j.venue||"", j.jobDescription||"", statusLabel(j.status), (j.open!==false ? "Open" : "Closed"),
-        j.poNumber||"", (j.assignedEmployees||[]).join("; "), j.createdBy||"", j.createdAt||"", j.lastUpdatedAt||""
-      ];
-    });
-    downloadCSV("hydraciv-jobs-" + todayStr() + ".csv", headers, rows);
-  }
-
-  function exportTimesheetsCSV(){
-    var wk = weekBounds(state.tsWeekOffset);
-    var weekLogs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr); });
-    var headers = ["Crew Member","Date","Venue","Hours","Completed","Job Description","Submitted By"];
-    var rows = [];
-    weekLogs.forEach(function(l){
-      (l.employees||[]).forEach(function(name){
-        rows.push([name, l.date||"", l.venue||"", l.hours||"", l.completed ? "Yes" : "No", l.jobDescription||"", l.submittedBy||""]);
-      });
-    });
-    rows.sort(function(a,b){ return a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]); });
-    downloadCSV("hydraciv-timesheets-" + wk.startStr + "-to-" + wk.endStr + ".csv", headers, rows);
   }
 
   function renderCrewView(){
@@ -1200,22 +1143,6 @@
     var jobForm = document.getElementById("job-form");
     if (jobForm) jobForm.addEventListener("submit", onSubmitJobForm);
 
-    var photoInput = document.getElementById("photo-input");
-    if (photoInput){
-      photoInput.addEventListener("change", function(){
-        var preview = document.getElementById("photo-preview");
-        if (!preview) return;
-        preview.innerHTML = "";
-        Array.prototype.forEach.call(photoInput.files, function(file){
-          if (!file.type || file.type.indexOf("image/") !== 0) return;
-          var url = URL.createObjectURL(file);
-          var img = document.createElement("img");
-          img.src = url; img.className = "photo-thumb";
-          preview.appendChild(img);
-        });
-      });
-    }
-
     var crewForm = document.getElementById("crew-form");
     if (crewForm) crewForm.addEventListener("submit", onSubmitCrew);
     var crewToggleBtn = root.querySelector('[data-action="toggle-crew-form"]');
@@ -1249,11 +1176,6 @@
     }
 
     root.querySelectorAll("[data-crew-jobs-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.crewJobsTab=b.getAttribute("data-crew-jobs-tab"); render(); }); });
-
-    var exportJobsBtn = root.querySelector('[data-action="export-jobs-csv"]');
-    if (exportJobsBtn) exportJobsBtn.addEventListener("click", exportJobsCSV);
-    var exportTsBtn = root.querySelector('[data-action="export-timesheets-csv"]');
-    if (exportTsBtn) exportTsBtn.addEventListener("click", exportTimesheetsCSV);
   }
 
   function onSubmitSetup(e){
@@ -1340,19 +1262,6 @@
       });
   }
 
-  // Uploads selected photo files to Storage under job-photos/{jobId}/{logId}-... and
-  // resolves to an array of download URLs. Resolves to [] if there's nothing to upload
-  // or Storage isn't available (photos are always optional — never blocks saving a job sheet).
-  function uploadJobPhotos(jobId, logId, files){
-    if (!storage || !files || !files.length) return Promise.resolve([]);
-    var uploads = files.map(function(file, i){
-      var safeName = (file.name || "photo").replace(/[^a-zA-Z0-9.\-_]/g, "_");
-      var path = "job-photos/" + jobId + "/" + logId + "-" + i + "-" + Date.now() + "-" + safeName;
-      return storage.ref().child(path).put(file).then(function(snap){ return snap.ref.getDownloadURL(); });
-    });
-    return Promise.all(uploads).catch(function(){ return []; }); // don't fail the whole save over a photo upload hiccup
-  }
-
   function onSubmitJobForm(e){
     e.preventDefault();
     if (!db) return;
@@ -1366,7 +1275,6 @@
     var materials = f.materials.value.trim();
     var estimatedReturn = f.estimatedReturn ? f.estimatedReturn.value : "";
     var remainingWork = f.remainingWork ? f.remainingWork.value.trim() : "";
-    var photoFiles = f.photos ? Array.prototype.slice.call(f.photos.files) : [];
 
     if (!jobDescription || !date || !hours || employees.length===0){
       state.formMsg = {type:"error", text:"Please fill in the job description, date, hours and at least one crew member."};
@@ -1398,14 +1306,8 @@
         estimatedReturn: completed ? "" : estimatedReturn, remainingWork: completed ? "" : remainingWork,
         employees: employees, submittedBy: state.session.name, submittedAt: new Date().toISOString(),
       };
-      var newLogRef;
-      return db.collection("job-logs").add(logBody).then(function(ref){
-        newLogRef = ref;
-        return uploadJobPhotos(jobId, ref.id, photoFiles);
-      }).then(function(urls){
-        var jobUpdateP = db.collection("jobs").doc(jobId).update({open: !completed, lastUpdatedAt: new Date().toISOString()});
-        var logUpdateP = urls.length ? newLogRef.update({photos: urls}) : Promise.resolve();
-        return Promise.all([jobUpdateP, logUpdateP]);
+      return db.collection("job-logs").add(logBody).then(function(){
+        return db.collection("jobs").doc(jobId).update({open: !completed, lastUpdatedAt: new Date().toISOString()});
       });
     }
 
@@ -1415,8 +1317,10 @@
       var venue = f.venue.value.trim();
       if (!venue){ state.formBusy=false; state.formMsg={type:"error", text:"Add the venue / job site."}; render(); return; }
       emailVenue = venue;
+      var clientSegOn = root.querySelector('#job-form [data-seg="client"] .on');
+      var client = clientSegOn ? clientSegOn.getAttribute("data-val") : "";
       p = db.collection("jobs").add({
-        venue: venue, jobDescription: jobDescription,
+        venue: venue, jobDescription: jobDescription, client: client,
         assignedEmployees: employees, status: "in-process", open: true,
         createdBy: state.session.name, createdAt: new Date().toISOString(),
       }).then(function(ref){ return afterLog(ref.id, venue); });
@@ -1428,14 +1332,7 @@
         estimatedReturn: completed ? "" : estimatedReturn, remainingWork: completed ? "" : remainingWork,
         employees: employees, editedBy: state.session.name, editedAt: new Date().toISOString(),
       };
-      p = db.collection("job-logs").doc(editLogId).update(patch).then(function(){
-        return uploadJobPhotos(editJobId, editLogId, photoFiles);
-      }).then(function(urls){
-        var photoUpdateP = urls.length
-          ? db.collection("job-logs").doc(editLogId).update({photos: firebase.firestore.FieldValue.arrayUnion.apply(null, urls)})
-          : Promise.resolve();
-        return Promise.all([photoUpdateP, recomputeJobOpen(editJobId)]);
-      });
+      p = db.collection("job-logs").doc(editLogId).update(patch).then(function(){ return recomputeJobOpen(editJobId); });
     } else {
       var jobId = f.getAttribute("data-job-id");
       var job = state.jobs.filter(function(j){return j.id===jobId;})[0];
@@ -1503,6 +1400,11 @@
     if (!venue || !jobDescription) return;
     var patch = {venue: venue, jobDescription: jobDescription};
     if (f.poNumber) patch.poNumber = f.poNumber.value.trim();
+    if (f.invoiceAmount){
+      var amt = f.invoiceAmount.value.trim();
+      var parsedAmt = parseFloat(amt);
+      patch.invoiceAmount = (amt === "" || isNaN(parsedAmt)) ? null : Math.round(parsedAmt * 100) / 100;
+    }
     db.collection("jobs").doc(jobId).update(patch).then(function(){
       state.editingJobId = null; toast("Job details updated"); render();
     }).catch(function(){ toast("Couldn't save those details."); });
@@ -1527,7 +1429,6 @@
 
     firebase.auth().signInAnonymously().then(function(){
       db = firebase.firestore();
-      try{ storage = firebase.storage(); }catch(e){ storage = null; }
       dbStatus = "ready";
 
       db.collection("crew").orderBy("createdAt","asc").onSnapshot(function(snap){
