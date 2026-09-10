@@ -232,12 +232,31 @@
   :root[data-theme="dark"] .toast, :root:not([data-theme="light"]) .toast{background:var(--surface-3); color:var(--ink);}
 
   .center-card{max-width:420px; margin:0 auto;}
+
+  /* ---------- Printing: weekly timesheets & individual jobs ---------- */
+  #print-area{display:none;}
+  @media print{
+    body.printing > *:not(#print-area){display:none !important;}
+    #print-area{display:block !important;}
+    @page{margin:1.5cm;}
+  }
+  #print-area{font-family:"Segoe UI",-apple-system,Roboto,sans-serif; color:#16222b; max-width:720px; margin:0 auto; padding:20px;}
+  #print-area .p-head{border-bottom:2px solid #123f5c; padding-bottom:12px; margin-bottom:16px;}
+  #print-area .p-head h1{margin:0 0 4px; font-size:21px; color:#123f5c;}
+  #print-area .p-sub{font-size:13.5px; color:#55676f;}
+  #print-area .p-meta{font-size:12.5px; color:#55676f; margin-top:4px;}
+  #print-area .p-row{display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid #e2e9eb; font-size:13.5px;}
+  #print-area .p-row:last-child{border-bottom:none;}
+  #print-area .p-total{margin-top:16px; text-align:right; font-weight:700; font-size:15px; color:#123f5c;}
+  #print-area .p-foot{margin-top:24px; font-size:11.5px; color:#9aa7ac;}
+  #print-area .p-flag{color:#b5791c; font-weight:600;}
 </style>
 </head>
 <body>
 
 <div id="root" class="app"></div>
 <div id="toast-host"></div>
+<div id="print-area"></div>
 
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
@@ -271,6 +290,9 @@
     crewFormOpen: false, crewRole: "employee",
     tsEmployee: null, tsWeekOffset: 0,
     changePinOpen: false, changePinMsg: null,
+    byCrewEmployee: null,
+    venueQuery: "",
+    crewJobsTab: "open",
   };
 
   function esc(s){
@@ -305,9 +327,9 @@
   // ---------- EmailJS: instant "job logged" notification to the office ----------
   // Fill these in from your EmailJS account (emailjs.com) — see SETUP-EMAIL.md at the repo root
   // for the exact steps (create account, add an email service, create one template, get keys).
-  var EMAILJS_PUBLIC_KEY  = "YOUR_EMAILJS_PUBLIC_KEY";
-  var EMAILJS_SERVICE_ID  = "YOUR_EMAILJS_SERVICE_ID";
-  var EMAILJS_TEMPLATE_ID = "YOUR_EMAILJS_TEMPLATE_ID";
+  var EMAILJS_PUBLIC_KEY  = "2w3Xg83Y0sdVsT6WF";
+  var EMAILJS_SERVICE_ID  = "service_rt02lxn";
+  var EMAILJS_TEMPLATE_ID = "3e332g4";
   var EMAILJS_OFFICE_EMAIL = "grace@hydraciv.com.au";
   var emailjsReady = false;
   try{
@@ -489,11 +511,24 @@
     html += '<div class="section-title">Your jobs</div>';
     html += '<p class="section-sub">Not finished yet? Add an update instead of starting a new one.</p>';
     html += '<button class="btn btn-primary btn-block" style="margin-bottom:14px" data-action="new-job">Start a new job</button>';
+
     var mine = myJobs(me);
+    var notFinished = mine.filter(function(j){ return j.open !== false; });
+    var doneJobs = mine.filter(function(j){ return j.open === false; });
+    var tab = state.crewJobsTab === "completed" ? "completed" : "open";
+
+    html += '<div class="subtabs">' +
+      '<button data-crew-jobs-tab="open" class="'+(tab==="open"?"on":"")+'">Not finished ('+notFinished.length+')</button>' +
+      '<button data-crew-jobs-tab="completed" class="'+(tab==="completed"?"on":"")+'">Completed ('+doneJobs.length+')</button>' +
+    '</div>';
+
+    var list = tab === "completed" ? doneJobs : notFinished;
     if (mine.length === 0){
       html += '<p class="empty-note">No jobs logged yet.</p>';
+    } else if (list.length === 0){
+      html += '<p class="empty-note">'+(tab==="completed" ? "Nothing completed yet." : "Nothing outstanding — nice work.")+'</p>';
     } else {
-      mine.forEach(function(j){ html += renderJobCard(j, {employeeView:true}); });
+      list.forEach(function(j){ html += renderJobCard(j, {employeeView:true}); });
     }
     html += '</div>';
     return html;
@@ -637,7 +672,7 @@
   // ---------- MANAGEMENT ----------
   function renderManagementTab(){
     var html = '<div class="subtabs">';
-    [["overview","Overview"],["jobs","Jobs"],["invoiced","Invoiced"],["timesheets","Timesheets"],["crew","Crew"]].forEach(function(t){
+    [["overview","Overview"],["jobs","Jobs"],["invoiced","Invoiced"],["timesheets","Timesheets"],["bycrew","By Crew"],["search","Search"],["crew","Crew"]].forEach(function(t){
       html += '<button data-mgmt="'+t[0]+'" class="'+(state.mgmtSub===t[0]?"on":"")+'">'+t[1]+'</button>';
     });
     html += '</div>';
@@ -645,6 +680,8 @@
     else if (state.mgmtSub === "jobs") html += renderJobsAdmin();
     else if (state.mgmtSub === "invoiced") html += renderInvoicedJobs();
     else if (state.mgmtSub === "timesheets") html += renderTimesheets();
+    else if (state.mgmtSub === "bycrew") html += renderByCrew();
+    else if (state.mgmtSub === "search") html += renderVenueSearch();
     else html += renderCrewView();
     return html;
   }
@@ -721,6 +758,7 @@
     html += '<div class="log-foot">';
     if (opts.employeeView){ html += '<button type="button" class="btn btn-outline btn-sm" data-add-update="'+esc(j.id)+'">Add update</button>'; }
     if (opts.admin || opts.employeeView){ html += '<button type="button" class="btn btn-ghost btn-sm" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">Edit job details</button>'; }
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-print-job="'+esc(j.id)+'">Print</button>';
     html += '</div>';
     if (logs.length){
       html += '<div class="timeline">';
@@ -765,34 +803,214 @@
     return html;
   }
 
-  function renderTimesheets(){
+  // ---------- By crew: pick a crew member, see just their jobs ----------
+  function renderByCrew(){
     var crew = activeCrew();
-    var sel = state.tsEmployee || (crew[0] && crew[0].name) || null;
+    var sel = state.byCrewEmployee || (crew[0] && crew[0].name) || null;
+
     var html = '<div class="card">';
-    html += '<div class="section-title">Timesheets</div><p class="section-sub">Pick a crew member to see their hours by week.</p>';
-    html += '<div class="chips" style="margin-bottom:14px">' + crew.map(function(c){
-      return '<button class="chip'+(sel===c.name?" on":"")+'" data-ts-emp="'+esc(c.name)+'">'+esc(c.name)+'</button>';
+    html += '<div class="section-title">By crew</div><p class="section-sub">Pick a crew member to see just their jobs — ongoing ones first, completed and invoiced pushed to the bottom.</p>';
+    html += '<div class="chips">' + crew.map(function(c){
+      return '<button class="chip'+(sel===c.name?" on":"")+'" data-bycrew-emp="'+esc(c.name)+'">'+esc(c.name)+'</button>';
     }).join("") + '</div>';
+    html += '</div>';
 
-    if (!sel){ html += '<p class="empty-note">Add crew first.</p></div>'; return html; }
+    if (!sel){ html += '<div class="card"><p class="empty-note">Add crew first.</p></div>'; return html; }
 
-    var wk = weekBounds(state.tsWeekOffset);
-    var logs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(sel) !== -1; });
-    var total = logs.reduce(function(s,l){return s+numHours(l.hours);},0);
-    var byDay = {}; logs.forEach(function(l){ (byDay[l.date]=byDay[l.date]||[]).push(l); });
-    var days = Object.keys(byDay).sort().reverse();
+    var mine = state.jobs.filter(function(j){ return (j.assignedEmployees||[]).indexOf(sel) !== -1; });
+    var rank = function(j){ return j.status==="invoiced" ? 2 : (j.status==="completed" ? 1 : 0); };
+    mine.sort(function(a,b){
+      var r = rank(a) - rank(b);
+      if (r !== 0) return r;
+      return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||"");
+    });
 
-    html += '<div class="weeknav"><button data-ts-week="-1">&larr;</button><div class="label">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+' &middot; <span class="mono">'+total.toFixed(1)+'h</span></div><button data-ts-week="1">&rarr;</button></div>';
-
-    if (days.length===0){ html += '<p class="empty-note">No job sheets for '+esc(sel)+' this week.</p>'; }
-    else { days.forEach(function(d){ html += '<div class="day-heading">'+fmtDay(d)+'</div>'; byDay[d].forEach(function(l){ html += renderLogCard(l); }); }); }
+    html += '<div class="card">';
+    html += '<div class="section-title" style="font-size:17px">' + esc(sel) + "'s jobs</div>";
+    if (mine.length === 0){ html += '<p class="empty-note">No jobs assigned to '+esc(sel)+' yet.</p>'; }
+    else { mine.forEach(function(j){ html += renderJobCard(j, {admin:true}); }); }
     html += '</div>';
     return html;
   }
 
+  // ---------- Venue search: every job ever logged at a site, any status ----------
+  function renderVenueSearch(){
+    var html = '<div class="card">';
+    html += '<div class="section-title">Search by venue</div><p class="section-sub">Find every job logged at a site or address, across every status.</p>';
+    html += field("Venue or job site", '<input type="text" id="venue-search-input" placeholder="e.g. Deer Park" value="'+esc(state.venueQuery)+'" autocomplete="off">');
+    html += '</div>';
+
+    var q = (state.venueQuery || "").trim().toLowerCase();
+    if (!q){ html += '<div class="card"><p class="empty-note">Start typing a venue or job site name.</p></div>'; return html; }
+
+    var matches = state.jobs.filter(function(j){ return (j.venue || "").toLowerCase().indexOf(q) !== -1; });
+    html += '<div class="card">';
+    html += '<div class="section-title" style="font-size:17px">' + matches.length + (matches.length===1 ? " job found" : " jobs found") + '</div>';
+    if (matches.length === 0){ html += '<p class="empty-note">No jobs match &ldquo;'+esc(state.venueQuery)+'&rdquo;.</p>'; }
+    else { matches.forEach(function(j){ html += renderJobCard(j, {admin:true}); }); }
+    html += '</div>';
+    return html;
+  }
+
+  function renderTimesheets(){
+    var wk = weekBounds(state.tsWeekOffset);
+    var weekLogs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr); });
+    var byEmp = {};
+    weekLogs.forEach(function(l){ (l.employees||[]).forEach(function(name){ (byEmp[name]=byEmp[name]||[]).push(l); }); });
+    var names = Object.keys(byEmp).sort();
+
+    var html = '<div class="card">';
+    html += '<div class="section-title">Timesheets</div><p class="section-sub">One block per crew member for the week below — hit Copy, then paste into an email.</p>';
+    html += '<div class="weeknav"><button data-ts-week="-1">&larr;</button><div class="label">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div><button data-ts-week="1">&rarr;</button></div>';
+    html += '</div>';
+
+    if (names.length === 0){
+      html += '<div class="card"><p class="empty-note">No jobs logged by anyone this week.</p></div>';
+      return html;
+    }
+
+    names.forEach(function(name){
+      var logs = byEmp[name].slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+      var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
+      html += '<div class="card">';
+      html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">' +
+        '<div><div class="section-title" style="font-size:17px">'+esc(name)+'</div>' +
+        '<p class="section-sub" style="margin-bottom:0">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+' &middot; <span class="mono">'+total.toFixed(1)+'h</span></p></div>' +
+        '<button type="button" class="btn btn-outline btn-sm" data-copy-ts="'+esc(name)+'">Copy timesheet</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-print-ts="'+esc(name)+'">Print</button>' +
+      '</div>';
+      html += '<div class="timeline" style="margin-top:12px">' + logs.map(function(l){
+        var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
+        return '<div class="timeline-item"><strong>'+fmtDay(l.date)+'</strong> &middot; '+esc(l.venue||"")+' &middot; <span class="mono">'+hrs+'h</span>' +
+          (!l.completed ? ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>' : '') +
+        '</div>';
+      }).join("") + '</div>';
+      html += '</div>';
+    });
+
+    return html;
+  }
+
+  // Plain-text version of a crew member's weekly timesheet, ready to paste into an email.
+  function buildTimesheetText(name, wk, logs, total){
+    var lines = [];
+    lines.push(name + "'s timesheet");
+    lines.push(fmtShort(wk.startStr) + " to " + fmtShort(wk.endStr));
+    lines.push("");
+    logs.forEach(function(l){
+      var hrs = (l.hours!=null && l.hours!=="") ? l.hours : "?";
+      var line = fmtDay(l.date) + ": " + (l.venue||"") + " - " + hrs + "h";
+      if (!l.completed) line += " (follow-up needed)";
+      lines.push(line);
+    });
+    lines.push("");
+    lines.push("Total: " + total.toFixed(1) + "h");
+    return lines.join("\n");
+  }
+
+  function copyTimesheetFor(name){
+    var wk = weekBounds(state.tsWeekOffset);
+    var logs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(name) !== -1; });
+    logs.sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+    var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
+    var text = buildTimesheetText(name, wk, logs, total);
+    copyTextToClipboard(text, function(ok){
+      toast(ok ? "Copied " + name + "'s timesheet" : "Couldn't copy automatically — select and copy manually");
+    });
+  }
+
+  function copyTextToClipboard(text, cb){
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){ cb(true); }).catch(function(){ fallbackCopyText(text, cb); });
+    } else {
+      fallbackCopyText(text, cb);
+    }
+  }
+  function fallbackCopyText(text, cb){
+    try{
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      var ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      cb(ok);
+    }catch(e){ cb(false); }
+  }
+
+  // ---------- Printing: weekly timesheets & individual jobs ----------
+  var printArea = document.getElementById("print-area");
+  window.addEventListener("afterprint", function(){
+    document.body.classList.remove("printing");
+    if (printArea) printArea.innerHTML = "";
+  });
+  function openPrintArea(html){
+    if (!printArea) return;
+    printArea.innerHTML = html;
+    document.body.classList.add("printing");
+    window.print();
+  }
+  function printFooter(){
+    return '<div class="p-foot">Hydraciv Crew Portal &middot; printed ' + esc(new Date().toLocaleDateString()) + '</div>';
+  }
+
+  function buildTimesheetPrintHTML(name, wk, logs, total){
+    var rows = logs.map(function(l){
+      var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
+      return '<div class="p-row"><div><strong>'+fmtDay(l.date)+'</strong> &middot; '+esc(l.venue||"")+
+        (!l.completed ? ' <span class="p-flag">(follow-up needed)</span>' : '') +
+        '</div><div class="mono">'+hrs+'h</div></div>';
+    }).join("");
+    return (
+      '<div class="p-head"><h1>'+esc(name)+' &mdash; Timesheet</h1><div class="p-sub">'+esc(fmtShort(wk.startStr))+' to '+esc(fmtShort(wk.endStr))+'</div></div>' +
+      (rows || '<p class="empty-note">No jobs logged this week.</p>') +
+      '<div class="p-total">Total: '+total.toFixed(1)+'h</div>' +
+      printFooter()
+    );
+  }
+
+  function printTimesheetFor(name){
+    var wk = weekBounds(state.tsWeekOffset);
+    var logs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(name) !== -1; });
+    logs.sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+    var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
+    openPrintArea(buildTimesheetPrintHTML(name, wk, logs, total));
+  }
+
+  function buildJobPrintHTML(j){
+    var logs = jobLogsFor(j.id).slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+    var metaBits = [];
+    if (j.poNumber) metaBits.push("PO " + esc(j.poNumber));
+    if (j.client) metaBits.push(esc(j.client));
+    metaBits.push("Status: " + esc(statusLabel(j.status)));
+    if (j.assignedEmployees && j.assignedEmployees.length) metaBits.push("Assigned: " + j.assignedEmployees.map(esc).join(", "));
+    var rows = logs.map(function(l){
+      var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
+      var extra = "";
+      if (l.materials) extra += '<div class="p-meta">Materials: '+esc(l.materials)+'</div>';
+      if (!l.completed && l.remainingWork) extra += '<div class="p-meta">Still to do: '+esc(l.remainingWork)+'</div>';
+      return '<div class="p-row"><div><strong>'+fmtDay(l.date)+'</strong> &middot; '+esc(l.submittedBy||"")+
+        (l.completed ? '' : ' <span class="p-flag">(follow-up needed)</span>') + extra +
+        '</div><div class="mono">'+hrs+'h</div></div>';
+    }).join("");
+    return (
+      '<div class="p-head"><h1>'+esc(j.venue||"")+'</h1>' +
+        (j.jobDescription ? '<div class="p-sub">'+esc(j.jobDescription)+'</div>' : '') +
+        '<div class="p-meta">'+metaBits.join(' &middot; ')+'</div>' +
+      '</div>' +
+      (rows || '<p class="empty-note">No updates logged yet.</p>') +
+      printFooter()
+    );
+  }
+
+  function printJob(jobId){
+    var j = state.jobs.filter(function(x){ return x.id === jobId; })[0];
+    if (!j) return;
+    openPrintArea(buildJobPrintHTML(j));
+  }
+
   function renderCrewView(){
     var html = '<div class="card">';
-    html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px;"><div><div class="section-title">Crew roster</div><p class="section-sub">Everyone sets a 4-digit PIN on first login. An email on file is needed for reminders and any auto-sent job/timesheet emails to reach them.</p></div>' +
+    html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px;"><div><div class="section-title">Crew roster</div><p class="section-sub">Everyone sets a 4-digit PIN on first login. Job and timesheet emails go to the office only — crew aren\'t emailed automatically.</p></div>' +
       '<button class="btn btn-outline btn-sm" data-action="toggle-crew-form">'+(state.crewFormOpen?"Close":"Add crew")+'</button></div>';
     if (state.crewFormOpen){
       html += '<form id="crew-form" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line)">';
@@ -815,9 +1033,8 @@
       state.crew.forEach(function(c){
         var login = loginFor(c.id);
         var pinPill = (login && login.pin) ? '<span class="pill pill-success">PIN set</span>' : '<span class="pill pill-warning">Not set yet</span>';
-        var emailPill = c.email ? '' : ' <span class="pill pill-warning">No email — reminders won\'t reach them</span>';
         html += '<div class="crew-row"><div class="info"><div class="name">'+esc(c.name)+' <span class="pill pill-neutral">'+(c.role==="admin"?"Manager":"Employee")+'</span>'+(c.active===false?' <span class="pill pill-neutral">inactive</span>':'')+'</div>' +
-          (c.email?'<div class="email">'+esc(c.email)+'</div>':'') + '<div style="margin-top:4px">'+pinPill+emailPill+'</div></div>' +
+          (c.email?'<div class="email">'+esc(c.email)+'</div>':'') + '<div style="margin-top:4px">'+pinPill+'</div></div>' +
           '<div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">' +
           '<button class="btn btn-outline btn-sm" data-crew-toggle="'+esc(c.id)+'">'+(c.active===false?"Reactivate":"Deactivate")+'</button>' +
           ((login && login.pin) ? '<button class="btn btn-ghost btn-sm" data-reset-pin="'+esc(c.id)+'" style="padding:2px 4px">Reset PIN</button>' : '') +
@@ -834,7 +1051,7 @@
     root.querySelectorAll("[data-mgmt]").forEach(function(b){ b.addEventListener("click", function(){ state.mgmtSub=b.getAttribute("data-mgmt"); render(); }); });
 
     var logoutBtn = root.querySelector('[data-action="logout"]');
-    if (logoutBtn) logoutBtn.addEventListener("click", function(){ state.session=null; clearSession(); state.loginName=""; state.loginPin=""; render(); });
+    if (logoutBtn) logoutBtn.addEventListener("click", function(){ state.session=null; clearSession(); state.loginName=""; state.loginPin=""; state.crewJobsTab="open"; render(); });
 
     var changePinBtn = root.querySelector('[data-action="change-pin"]');
     if (changePinBtn) changePinBtn.addEventListener("click", function(){ state.changePinOpen=true; state.changePinMsg=null; render(); });
@@ -910,8 +1127,25 @@
       });
     });
 
-    root.querySelectorAll("[data-ts-emp]").forEach(function(b){ b.addEventListener("click", function(){ state.tsEmployee=b.getAttribute("data-ts-emp"); state.tsWeekOffset=0; render(); }); });
     root.querySelectorAll("[data-ts-week]").forEach(function(b){ b.addEventListener("click", function(){ state.tsWeekOffset += parseInt(b.getAttribute("data-ts-week"),10); render(); }); });
+    root.querySelectorAll("[data-copy-ts]").forEach(function(b){ b.addEventListener("click", function(){ copyTimesheetFor(b.getAttribute("data-copy-ts")); }); });
+    root.querySelectorAll("[data-print-ts]").forEach(function(b){ b.addEventListener("click", function(){ printTimesheetFor(b.getAttribute("data-print-ts")); }); });
+    root.querySelectorAll("[data-print-job]").forEach(function(b){ b.addEventListener("click", function(){ printJob(b.getAttribute("data-print-job")); }); });
+
+    root.querySelectorAll("[data-bycrew-emp]").forEach(function(b){ b.addEventListener("click", function(){ state.byCrewEmployee=b.getAttribute("data-bycrew-emp"); render(); }); });
+
+    var venueSearchInput = document.getElementById("venue-search-input");
+    if (venueSearchInput){
+      venueSearchInput.addEventListener("input", function(){
+        var pos = venueSearchInput.selectionStart;
+        state.venueQuery = venueSearchInput.value;
+        render();
+        var el = document.getElementById("venue-search-input");
+        if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
+      });
+    }
+
+    root.querySelectorAll("[data-crew-jobs-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.crewJobsTab=b.getAttribute("data-crew-jobs-tab"); render(); }); });
   }
 
   function onSubmitSetup(e){
