@@ -139,10 +139,8 @@
   }
   .seg button:last-child{border-right:none;}
   .seg button.on{background:var(--accent); color:var(--accent-ink);}
-  .seg-status button[data-val="quoted"].on{background:var(--violet); color:#fff;}
-  .seg-status button[data-val="in-process"].on{background:var(--accent);}
-  .seg-status button[data-val="completed"].on{background:var(--success);}
-  .seg-status button[data-val="invoiced"].on{background:var(--ink); color:var(--ground);}
+
+  .status-select{border:1px solid var(--line); border-radius:999px; padding:5px 10px; font-size:12px; font-weight:700; color:var(--ink); background:var(--surface); cursor:pointer;}
 
   .chips{display:flex; flex-wrap:wrap; gap:8px;}
   .chip{border:1px solid var(--line); background:var(--surface); border-radius:999px; padding:8px 14px; cursor:pointer; font-size:13.5px; font-weight:500; color:var(--ink-soft);}
@@ -294,6 +292,7 @@
     byCrewEmployee: null,
     venueQuery: "",
     crewJobsTab: "open",
+    expandedJobs: {},
   };
 
   function esc(s){
@@ -385,6 +384,59 @@
       subject: subject,
       html_body: brandedEmailShell({header: headerHtml, body: bodyHtml}),
     }).catch(function(err){ console.warn("Instant job email failed to send:", err); });
+  }
+
+  // ---------- Manual "email this to myself" — a job sheet or a weekly timesheet, on demand ----------
+  function emailJob(jobId){
+    var j = state.jobs.filter(function(x){ return x.id === jobId; })[0];
+    if (!j) return;
+    if (!emailjsReady){ toast("Email isn't set up yet."); return; }
+    var logs = jobLogsFor(j.id).slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+    var rowsHtml = logs.map(function(l){
+      var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
+      var extraBits = [];
+      if (l.materials) extraBits.push("Materials: "+esc(l.materials));
+      if (l.alsoOnsite) extraBits.push("Also onsite: "+esc(l.alsoOnsite));
+      if (!l.completed && l.remainingWork) extraBits.push("Still to do: "+esc(l.remainingWork));
+      return '<tr><td style="padding:6px 10px 6px 0;color:#7d8d94;font-size:11px;text-transform:uppercase;letter-spacing:.04em;vertical-align:top;white-space:nowrap;">'+esc(fmtDay(l.date))+'</td>' +
+        '<td style="padding:6px 0;">'+esc(l.submittedBy||"")+' &middot; '+hrs+'h' +
+        (extraBits.length ? '<br><span style="color:#7d8d94;font-size:12px;">'+extraBits.join(" &middot; ")+'</span>' : '') +
+        '</td></tr>';
+    }).join("");
+    var metaLine = [j.client, j.vtask?("VTASK "+j.vtask):"", j.poNumber?("PO "+j.poNumber):""].filter(Boolean).map(esc).join(" &middot; ");
+    var bodyHtml = (metaLine ? '<p style="margin:0 0 10px;color:#55676f;font-size:13px;">'+metaLine+'</p>' : '') +
+      (j.jobDescription ? '<p style="margin:0 0 14px;">'+esc(j.jobDescription)+'</p>' : '') +
+      '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">' + (rowsHtml || '<tr><td style="padding:6px 0;color:#7d8d94;">No updates logged yet.</td></tr>') + '</table>';
+    var headerHtml = '<h1 style="margin:0;font-size:22px;font-weight:800;color:#fff;">'+esc(j.venue||"")+'</h1>' +
+      '<p style="margin:6px 0 0;font-size:13px;color:#cfe6f4;">Status: '+esc(statusLabel(j.status))+'</p>';
+    emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+      to_email: EMAILJS_OFFICE_EMAIL, cc_email: "",
+      subject: "Job sheet — " + (j.venue||""),
+      html_body: brandedEmailShell({header: headerHtml, body: bodyHtml}),
+    }).then(function(){ toast("Emailed to " + EMAILJS_OFFICE_EMAIL); }).catch(function(){ toast("Couldn't send that email — try again."); });
+  }
+
+  function emailTimesheetFor(name){
+    if (!emailjsReady){ toast("Email isn't set up yet."); return; }
+    var wk = weekBounds(state.tsWeekOffset);
+    var logs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(name) !== -1; });
+    logs.sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+    var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
+    var rowsHtml = logs.map(function(l){
+      var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
+      return '<tr><td style="padding:6px 10px 6px 0;color:#7d8d94;font-size:11px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">'+esc(fmtDay(l.date))+'</td>' +
+        '<td style="padding:6px 0;">'+esc(l.venue||"")+'</td>' +
+        '<td style="padding:6px 0;text-align:right;font-family:monospace;">'+hrs+'h</td></tr>';
+    }).join("");
+    var bodyHtml = '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">' + (rowsHtml || '<tr><td style="padding:6px 0;color:#7d8d94;">No jobs logged this week.</td></tr>') + '</table>' +
+      '<p style="text-align:right;font-weight:700;margin-top:14px;color:#123f5c;">Total: '+total.toFixed(1)+'h</p>';
+    var headerHtml = '<h1 style="margin:0;font-size:22px;font-weight:800;color:#fff;">'+esc(name)+' &mdash; Timesheet</h1>' +
+      '<p style="margin:6px 0 0;font-size:13px;color:#cfe6f4;">'+esc(fmtShort(wk.startStr))+' to '+esc(fmtShort(wk.endStr))+'</p>';
+    emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+      to_email: EMAILJS_OFFICE_EMAIL, cc_email: "",
+      subject: name + "'s timesheet — " + fmtShort(wk.startStr) + " to " + fmtShort(wk.endStr),
+      html_body: brandedEmailShell({header: headerHtml, body: bodyHtml}),
+    }).then(function(){ toast("Emailed " + name + "'s timesheet"); }).catch(function(){ toast("Couldn't send that email — try again."); });
   }
 
   function activeCrew(){ return state.crew.filter(function(c){ return c.active !== false; }); }
@@ -675,16 +727,15 @@
   // ---------- MANAGEMENT ----------
   function renderManagementTab(){
     var html = '<div class="subtabs">';
-    [["overview","Overview"],["jobs","Jobs"],["invoiced","Invoiced"],["timesheets","Timesheets"],["bycrew","By Crew"],["search","Search"],["crew","Crew"]].forEach(function(t){
+    [["overview","Overview"],["jobs","Jobs"],["bycrew","By Crew"],["drew","For Drew"],["timesheets","Timesheets"],["crew","Crew"]].forEach(function(t){
       html += '<button data-mgmt="'+t[0]+'" class="'+(state.mgmtSub===t[0]?"on":"")+'">'+t[1]+'</button>';
     });
     html += '</div>';
     if (state.mgmtSub === "overview") html += renderOverview();
     else if (state.mgmtSub === "jobs") html += renderJobsAdmin();
-    else if (state.mgmtSub === "invoiced") html += renderInvoicedJobs();
-    else if (state.mgmtSub === "timesheets") html += renderTimesheets();
     else if (state.mgmtSub === "bycrew") html += renderByCrew();
-    else if (state.mgmtSub === "search") html += renderVenueSearch();
+    else if (state.mgmtSub === "drew") html += renderForDrew();
+    else if (state.mgmtSub === "timesheets") html += renderTimesheets();
     else html += renderCrewView();
     return html;
   }
@@ -737,6 +788,7 @@
         html += field("VTASK number (optional)", '<input type="text" name="vtask" value="'+esc(j.vtask||"")+'">');
         html += field("Purchase order (optional)", '<input type="text" name="poNumber" value="'+esc(j.poNumber||"")+'">');
         html += field("Invoice amount ($, optional)", '<input type="number" name="invoiceAmount" step="0.01" min="0" placeholder="e.g. 450.00" value="'+(j.invoiceAmount!=null?esc(j.invoiceAmount):"")+'">');
+        html += field("Comments (optional, management only)", '<textarea name="comments" placeholder="Notes for whoever prices or reviews this job">'+esc(j.comments||"")+'</textarea>');
       }
       html += '<div style="display:flex; gap:8px"><button type="submit" class="btn btn-primary" style="flex:1">Save details</button><button type="button" class="btn btn-outline" data-action="cancel-edit-job">Cancel</button></div>';
       html += '</form>';
@@ -744,78 +796,124 @@
       return html;
     }
 
-    html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div><div class="log-desc">'+esc(j.jobDescription||"")+'</div>';
-    var metaBits = [];
-    if (opts.admin && j.vtask) metaBits.push('VTASK '+esc(j.vtask));
-    if (opts.admin && j.poNumber) metaBits.push('PO '+esc(j.poNumber));
-    if (j.client) metaBits.push(esc(j.client));
-    html += '<div class="log-meta">'+metaBits.join(' &middot; ')+'</div></div>';
+    var expanded = !!state.expandedJobs[j.id];
+
+    // ---- Summary: venue, who was there, status (editable), price. Everything
+    // else is one tap away so the list doesn't feel like a wall of information. ----
+    html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
+    if (j.assignedEmployees && j.assignedEmployees.length){
+      html += '<div class="chips" style="margin-top:6px">'+j.assignedEmployees.map(function(n){return '<span class="pill pill-neutral">'+esc(n)+'</span>';}).join("")+'</div>';
+    }
+    html += '</div>';
     var priceBadge = "";
     if (opts.admin){
       priceBadge = (j.invoiceAmount != null && j.invoiceAmount !== "")
         ? '<button type="button" class="pill pill-success mono" style="border:none; cursor:pointer;" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">$'+Number(j.invoiceAmount).toFixed(2)+'</button>'
         : '<button type="button" class="pill pill-neutral" style="border:1px dashed var(--line); background:transparent; cursor:pointer;" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">+ Add price</button>';
     }
-    html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:5px;">' +
-      '<span class="pill '+(j.open===false?"pill-neutral":"pill-warning")+'">'+(j.open===false?"Closed":"Open")+'</span>' +
-      priceBadge +
-    '</div></div>';
-    if (j.assignedEmployees && j.assignedEmployees.length){
-      html += '<div class="chips" style="margin-top:8px">'+j.assignedEmployees.map(function(n){return '<span class="pill pill-neutral">'+esc(n)+'</span>';}).join("")+'</div>';
-    }
+    html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">';
     if (opts.admin){
-      html += '<div class="field" style="margin-top:10px; margin-bottom:4px"><label>Status</label><div class="seg seg-status" data-job-status="'+esc(j.id)+'">' +
-        ["quoted","in-process","completed","invoiced"].map(function(s){ return '<button type="button" data-val="'+s+'" class="'+(j.status===s?"on":"")+'">'+statusLabel(s)+'</button>'; }).join("") +
-      '</div></div>';
+      html += '<select class="status-select" data-job-status-select="'+esc(j.id)+'">' +
+        ["quoted","in-process","completed","invoiced"].map(function(s){ return '<option value="'+s+'" '+(j.status===s?"selected":"")+'>'+statusLabel(s)+'</option>'; }).join("") +
+      '</select>';
     } else {
-      html += '<div class="log-foot"><span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span></div>';
+      html += '<span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span>';
     }
+    html += priceBadge + '</div></div>';
+
+    html += '<button type="button" class="btn btn-ghost btn-sm" style="padding-left:0; margin-top:4px" data-toggle-job="'+esc(j.id)+'">'+(expanded?"&#9662; Hide details":"&#9656; View details")+'</button>';
+
+    if (!expanded){ html += '</div>'; return html; }
+
+    // ---- Expanded: everything else ----
+    html += '<div style="margin-top:6px; padding-top:10px; border-top:1px solid var(--line);">';
+    if (j.jobDescription) html += '<div class="log-desc">'+esc(j.jobDescription)+'</div>';
+    var metaBits = [];
+    if (opts.admin && j.vtask) metaBits.push('VTASK '+esc(j.vtask));
+    if (opts.admin && j.poNumber) metaBits.push('PO '+esc(j.poNumber));
+    if (j.client) metaBits.push(esc(j.client));
+    if (metaBits.length) html += '<div class="log-meta">'+metaBits.join(' &middot; ')+'</div>';
+    if (opts.admin && j.comments) html += '<div class="hint" style="margin-top:6px">Notes: '+esc(j.comments)+'</div>';
+
     html += '<div class="log-foot">';
     if (opts.employeeView){ html += '<button type="button" class="btn btn-outline btn-sm" data-add-update="'+esc(j.id)+'">Add update</button>'; }
     if (opts.admin || opts.employeeView){ html += '<button type="button" class="btn btn-ghost btn-sm" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">Edit job details</button>'; }
     html += '<button type="button" class="btn btn-ghost btn-sm" data-print-job="'+esc(j.id)+'">Print</button>';
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-email-job="'+esc(j.id)+'">Email</button>';
+    if (opts.admin){
+      html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
+    }
     html += '</div>';
+
     if (logs.length){
+      // Group entries by date so two people (or two updates) on the same day
+      // read as one block instead of separate near-duplicate-looking rows.
+      var byDate = {}, dateOrder = [];
+      logs.slice(0,14).forEach(function(l){
+        if (!byDate[l.date]){ byDate[l.date] = []; dateOrder.push(l.date); }
+        byDate[l.date].push(l);
+      });
       html += '<div class="timeline">';
-      logs.slice(0,6).forEach(function(l){
-        html += '<div class="timeline-item"><strong>'+fmtDay(l.date)+'</strong> &middot; <span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span> &middot; '+esc(l.submittedBy||"")+
-          (l.completed ? ' &middot; <span class="pill pill-success" style="padding:2px 7px">Completed</span>' : ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>') +
-          (l.materials ? '<br><span class="hint">Materials: '+esc(l.materials)+'</span>' : '') +
-          (l.alsoOnsite ? '<br><span class="hint">Also onsite: '+esc(l.alsoOnsite)+'</span>' : '') +
-          (!l.completed && l.remainingWork ? '<br><span class="hint">Still to do: '+esc(l.remainingWork)+'</span>' : '') +
-          '<br><button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0" data-edit-log="'+esc(l.id)+'">Edit this entry</button>' +
-        '</div>';
+      dateOrder.slice(0,8).forEach(function(d){
+        var entries = byDate[d];
+        html += '<div class="timeline-item"><strong>'+fmtDay(d)+'</strong>';
+        entries.forEach(function(l, idx){
+          html += '<div style="margin-top:4px;'+(idx>0?' padding-top:6px; border-top:1px dashed var(--line);':'')+'">' +
+            '<span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span> &middot; '+esc(l.submittedBy||"")+
+            (l.completed ? ' &middot; <span class="pill pill-success" style="padding:2px 7px">Completed</span>' : ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>') +
+            (l.materials ? '<br><span class="hint">Materials: '+esc(l.materials)+'</span>' : '') +
+            (l.alsoOnsite ? '<br><span class="hint">Also onsite: '+esc(l.alsoOnsite)+'</span>' : '') +
+            (!l.completed && l.remainingWork ? '<br><span class="hint">Still to do: '+esc(l.remainingWork)+'</span>' : '') +
+            '<br><button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0" data-edit-log="'+esc(l.id)+'">Edit this entry</button>' +
+          '</div>';
+        });
+        html += '</div>';
       });
       html += '</div>';
     }
-    html += '</div>';
+    html += '</div>'; // end expanded body
+    html += '</div>'; // end job-card
     return html;
   }
 
   function renderJobsAdmin(){
-    var filters = ["all","open","closed"];
-    var list = state.jobs.filter(function(j){ return j.status !== "invoiced"; });
-    if (state.jobsStatusFilter === "open") list = list.filter(function(j){return j.open!==false;});
-    if (state.jobsStatusFilter === "closed") list = list.filter(function(j){return j.open===false;});
+    var filters = ["all","open","closed","invoiced"];
+    var q = (state.venueQuery || "").trim().toLowerCase();
 
     var html = '<div class="card">';
-    html += '<div><div class="section-title">Jobs</div><p class="section-sub" style="margin-bottom:0">Every job, its status, and who\'s on it. Invoiced jobs move to their own tab.</p></div>';
-    html += '<div class="seg" style="margin:14px 0" data-seg="jobsFilter">' +
-      filters.map(function(f){ return '<button type="button" data-val="'+f+'" class="'+(state.jobsStatusFilter===f?"on":"")+'">'+f.charAt(0).toUpperCase()+f.slice(1)+'</button>'; }).join("") +
-    '</div>';
-    if (list.length===0){ html += '<p class="empty-note">No jobs yet.</p>'; }
-    else { list.forEach(function(j){ html += renderJobCard(j, {admin:true}); }); }
-    html += '</div>';
-    return html;
-  }
+    html += '<div><div class="section-title">Jobs</div><p class="section-sub" style="margin-bottom:0">Every job, its status, and who\'s on it.</p></div>';
+    html += field("Search", '<input type="text" id="venue-search-input" placeholder="e.g. Deer Park, shelf, VTASK 123" value="'+esc(state.venueQuery)+'" autocomplete="off">');
 
-  function renderInvoicedJobs(){
-    var list = state.jobs.filter(function(j){ return j.status === "invoiced"; });
-    var html = '<div class="card">';
-    html += '<div class="section-title">Invoiced</div><p class="section-sub">Jobs that have been invoiced — out of the way, but still here if you need them.</p>';
-    if (list.length===0){ html += '<p class="empty-note">Nothing invoiced yet.</p>'; }
-    else { list.forEach(function(j){ html += renderJobCard(j, {admin:true}); }); }
+    var list;
+    if (q){
+      var logsByJob = {};
+      state.jobLogs.forEach(function(l){ (logsByJob[l.jobId] = logsByJob[l.jobId] || []).push(l); });
+      function jobMatches(j){
+        var hay = [j.venue, j.jobDescription, j.vtask, j.poNumber, j.client, (j.assignedEmployees||[]).join(" ")].join(" ").toLowerCase();
+        if (hay.indexOf(q) !== -1) return true;
+        var logs = logsByJob[j.id] || [];
+        return logs.some(function(l){
+          var lhay = [l.materials, l.remainingWork, l.submittedBy, l.alsoOnsite, (l.employees||[]).join(" ")].join(" ").toLowerCase();
+          return lhay.indexOf(q) !== -1;
+        });
+      }
+      // Searching looks across every job ever logged, regardless of status —
+      // the All/Open/Closed/Invoiced filter only applies when not searching.
+      list = state.jobs.filter(jobMatches);
+      html += '<p class="hint" style="margin:8px 0 0">Searching everything, across all statuses.</p>';
+    } else {
+      list = state.jobs.slice();
+      if (state.jobsStatusFilter === "open") list = list.filter(function(j){return j.open!==false && j.status!=="invoiced";});
+      if (state.jobsStatusFilter === "closed") list = list.filter(function(j){return j.open===false && j.status!=="invoiced";});
+      if (state.jobsStatusFilter === "invoiced") list = list.filter(function(j){return j.status==="invoiced";});
+      html += '<div class="seg" style="margin:14px 0" data-seg="jobsFilter">' +
+        filters.map(function(f){ return '<button type="button" data-val="'+f+'" class="'+(state.jobsStatusFilter===f?"on":"")+'">'+f.charAt(0).toUpperCase()+f.slice(1)+'</button>'; }).join("") +
+      '</div>';
+    }
+
     html += '</div>';
+    if (list.length===0){ html += '<div class="card"><p class="empty-note">'+(q?"No jobs match.":"No jobs yet.")+'</p></div>'; }
+    else { list.forEach(function(j){ html += renderJobCard(j, {admin:true}); }); }
     return html;
   }
 
@@ -849,35 +947,16 @@
     return html;
   }
 
-  // ---------- Venue search: every job ever logged at a site, any status ----------
-  function renderVenueSearch(){
+  // ---------- For Drew: jobs Grace has flagged for pricing, that don't have a price yet ----------
+  function renderForDrew(){
+    var list = state.jobs.filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
+    list.sort(function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); });
+
     var html = '<div class="card">';
-    html += '<div class="section-title">Search</div><p class="section-sub">Search jobs by venue, crew member, or keyword — like searching your email.</p>';
-    html += field("Search", '<input type="text" id="venue-search-input" placeholder="e.g. Deer Park, Andrew, shelf" value="'+esc(state.venueQuery)+'" autocomplete="off">');
+    html += '<div class="section-title">For Drew</div><p class="section-sub">Jobs sent through for pricing. Add the price (and a comment if useful) and the job drops off this list on its own.</p>';
+    if (list.length===0){ html += '<p class="empty-note">Nothing waiting on a price right now.</p>'; }
     html += '</div>';
-
-    var q = (state.venueQuery || "").trim().toLowerCase();
-    if (!q){ html += '<div class="card"><p class="empty-note">Start typing a venue, crew member\'s name, or any keyword from a job.</p></div>'; return html; }
-
-    var logsByJob = {};
-    state.jobLogs.forEach(function(l){ (logsByJob[l.jobId] = logsByJob[l.jobId] || []).push(l); });
-
-    function jobMatches(j){
-      var hay = [j.venue, j.jobDescription, j.vtask, j.poNumber, j.client, (j.assignedEmployees||[]).join(" ")].join(" ").toLowerCase();
-      if (hay.indexOf(q) !== -1) return true;
-      var logs = logsByJob[j.id] || [];
-      return logs.some(function(l){
-        var lhay = [l.materials, l.remainingWork, l.submittedBy, l.alsoOnsite, (l.employees||[]).join(" ")].join(" ").toLowerCase();
-        return lhay.indexOf(q) !== -1;
-      });
-    }
-
-    var matches = state.jobs.filter(jobMatches);
-    html += '<div class="card">';
-    html += '<div class="section-title" style="font-size:17px">' + matches.length + (matches.length===1 ? " job found" : " jobs found") + '</div>';
-    if (matches.length === 0){ html += '<p class="empty-note">No jobs match &ldquo;'+esc(state.venueQuery)+'&rdquo;.</p>'; }
-    else { matches.forEach(function(j){ html += renderJobCard(j, {admin:true}); }); }
-    html += '</div>';
+    list.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
     return html;
   }
 
@@ -907,6 +986,7 @@
         '<p class="section-sub" style="margin-bottom:0">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+' &middot; <span class="mono">'+total.toFixed(1)+'h</span></p></div>' +
         '<button type="button" class="btn btn-outline btn-sm" data-copy-ts="'+esc(name)+'">Copy timesheet</button>' +
         '<button type="button" class="btn btn-ghost btn-sm" data-print-ts="'+esc(name)+'">Print</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-email-ts="'+esc(name)+'">Email</button>' +
       '</div>';
       html += '<div class="timeline" style="margin-top:12px">' + logs.map(function(l){
         var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
@@ -1151,18 +1231,28 @@
     root.querySelectorAll("[data-crew-toggle]").forEach(function(b){ b.addEventListener("click", function(){ toggleCrewActive(b.getAttribute("data-crew-toggle")); }); });
     root.querySelectorAll("[data-reset-pin]").forEach(function(b){ b.addEventListener("click", function(){ resetPin(b.getAttribute("data-reset-pin")); }); });
 
-    root.querySelectorAll("[data-job-status]").forEach(function(seg){
-      seg.querySelectorAll("button").forEach(function(b){
-        b.addEventListener("click", function(){ setJobStatus(seg.getAttribute("data-job-status"), b.getAttribute("data-val")); });
-      });
+    root.querySelectorAll("[data-job-status-select]").forEach(function(sel){
+      sel.addEventListener("change", function(){ setJobStatus(sel.getAttribute("data-job-status-select"), sel.value); });
     });
+    root.querySelectorAll("[data-toggle-job]").forEach(function(b){ b.addEventListener("click", function(){
+      var id = b.getAttribute("data-toggle-job");
+      state.expandedJobs[id] = !state.expandedJobs[id];
+      render();
+    }); });
+    root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
+    root.querySelectorAll("[data-email-job]").forEach(function(b){ b.addEventListener("click", function(){ emailJob(b.getAttribute("data-email-job")); }); });
+    root.querySelectorAll("[data-email-ts]").forEach(function(b){ b.addEventListener("click", function(){ emailTimesheetFor(b.getAttribute("data-email-ts")); }); });
 
     root.querySelectorAll("[data-ts-week]").forEach(function(b){ b.addEventListener("click", function(){ state.tsWeekOffset += parseInt(b.getAttribute("data-ts-week"),10); render(); }); });
     root.querySelectorAll("[data-copy-ts]").forEach(function(b){ b.addEventListener("click", function(){ copyTimesheetFor(b.getAttribute("data-copy-ts")); }); });
     root.querySelectorAll("[data-print-ts]").forEach(function(b){ b.addEventListener("click", function(){ printTimesheetFor(b.getAttribute("data-print-ts")); }); });
     root.querySelectorAll("[data-print-job]").forEach(function(b){ b.addEventListener("click", function(){ printJob(b.getAttribute("data-print-job")); }); });
 
-    root.querySelectorAll("[data-bycrew-emp]").forEach(function(b){ b.addEventListener("click", function(){ state.byCrewEmployee=b.getAttribute("data-bycrew-emp"); render(); }); });
+    root.querySelectorAll("[data-bycrew-emp]").forEach(function(b){ b.addEventListener("click", function(){
+      var name = b.getAttribute("data-bycrew-emp");
+      state.byCrewEmployee = (state.byCrewEmployee === name) ? null : name;
+      render();
+    }); });
 
     var venueSearchInput = document.getElementById("venue-search-input");
     if (venueSearchInput){
@@ -1397,6 +1487,15 @@
     db.collection("jobs").doc(jobId).update({status:status}).catch(function(){ toast("Couldn't update status."); });
   }
 
+  function toggleNeedsPricing(jobId){
+    if (!db) return;
+    var j = state.jobs.filter(function(x){ return x.id===jobId; })[0];
+    if (!j) return;
+    db.collection("jobs").doc(jobId).update({needsPricing: !j.needsPricing})
+      .then(function(){ toast(j.needsPricing ? "Removed from Drew's queue" : "Sent to Drew for pricing"); })
+      .catch(function(){ toast("Couldn't update that."); });
+  }
+
   function onSubmitJobDetails(e){
     e.preventDefault();
     if (!db) return;
@@ -1413,6 +1512,7 @@
       var parsedAmt = parseFloat(amt);
       patch.invoiceAmount = (amt === "" || isNaN(parsedAmt)) ? null : Math.round(parsedAmt * 100) / 100;
     }
+    if (f.comments) patch.comments = f.comments.value.trim();
     db.collection("jobs").doc(jobId).update(patch).then(function(){
       state.editingJobId = null; toast("Job details updated"); render();
     }).catch(function(){ toast("Couldn't save those details."); });
