@@ -218,6 +218,8 @@
 
   .job-card{border:1px solid var(--line); border-radius:10px; padding:14px 15px;}
   .job-card + .job-card{margin-top:10px;}
+  .job-card-tap{cursor:pointer;}
+  .job-card-tap:hover{border-color:var(--accent);}
   .job-head{display:flex; justify-content:space-between; align-items:flex-start; gap:10px;}
   .job-num{font-family:"IBM Plex Mono"; font-weight:600; font-size:12.5px; color:var(--accent-strong);}
   .timeline{margin-top:10px; padding-top:10px; border-top:1px solid var(--line);}
@@ -292,7 +294,7 @@
     byCrewEmployee: null,
     venueQuery: "",
     crewJobsTab: "open",
-    expandedJobs: {},
+    viewingJobId: null,
   };
 
   function esc(s){
@@ -462,6 +464,8 @@
       html += renderChangePinView();
     } else if (state.editLogId){
       html += renderEditLogView();
+    } else if (state.viewingJobId){
+      html += renderJobDetailView();
     } else if (!isAdmin()){
       html += renderEmployeeApp();
     } else if (state.activeTab === "log"){
@@ -727,14 +731,14 @@
   // ---------- MANAGEMENT ----------
   function renderManagementTab(){
     var html = '<div class="subtabs">';
-    [["overview","Overview"],["jobs","Jobs"],["bycrew","By Crew"],["drew","For Drew"],["timesheets","Timesheets"],["crew","Crew"]].forEach(function(t){
+    [["overview","Overview"],["jobs","Jobs"],["bycrew","By Crew"],["pricing","Pricing"],["timesheets","Timesheets"],["crew","Crew"]].forEach(function(t){
       html += '<button data-mgmt="'+t[0]+'" class="'+(state.mgmtSub===t[0]?"on":"")+'">'+t[1]+'</button>';
     });
     html += '</div>';
     if (state.mgmtSub === "overview") html += renderOverview();
     else if (state.mgmtSub === "jobs") html += renderJobsAdmin();
     else if (state.mgmtSub === "bycrew") html += renderByCrew();
-    else if (state.mgmtSub === "drew") html += renderForDrew();
+    else if (state.mgmtSub === "pricing") html += renderPricing();
     else if (state.mgmtSub === "timesheets") html += renderTimesheets();
     else html += renderCrewView();
     return html;
@@ -774,45 +778,82 @@
 
   function statTile(num,label){ return '<div class="stat-tile"><div class="num mono">'+num+'</div><div class="label">'+esc(label)+'</div></div>'; }
 
+  // Compact, read-only summary shown in every list — venue, who was there, status,
+  // price. Tap anywhere on it for the full, clearly laid-out detail view.
   function renderJobCard(j, opts){
     opts = opts || {};
-    var logs = jobLogsFor(j.id);
-    var editingDetails = state.editingJobId === j.id;
-    var html = '<div class="job-card">';
 
-    if (editingDetails){
-      html += '<form id="job-details-form" data-job-id="'+esc(j.id)+'">';
-      html += field("Venue / job site", '<input type="text" name="venue" value="'+esc(j.venue||"")+'" required>');
-      html += field("Job description", '<textarea name="jobDescription" required>'+esc(j.jobDescription||"")+'</textarea>');
-      if (opts.admin){
-        html += field("VTASK number (optional)", '<input type="text" name="vtask" value="'+esc(j.vtask||"")+'">');
-        html += field("Purchase order (optional)", '<input type="text" name="poNumber" value="'+esc(j.poNumber||"")+'">');
-        html += field("Invoice amount ($, optional)", '<input type="number" name="invoiceAmount" step="0.01" min="0" placeholder="e.g. 450.00" value="'+(j.invoiceAmount!=null?esc(j.invoiceAmount):"")+'">');
-        html += field("Comments (optional, management only)", '<textarea name="comments" placeholder="Notes for whoever prices or reviews this job">'+esc(j.comments||"")+'</textarea>');
-      }
-      html += '<div style="display:flex; gap:8px"><button type="submit" class="btn btn-primary" style="flex:1">Save details</button><button type="button" class="btn btn-outline" data-action="cancel-edit-job">Cancel</button></div>';
-      html += '</form>';
-      html += '</div>';
-      return html;
+    if (state.editingJobId === j.id){
+      return renderJobEditForm(j, opts);
     }
 
-    var expanded = !!state.expandedJobs[j.id];
-
-    // ---- Summary: venue, who was there, status (editable), price. Everything
-    // else is one tap away so the list doesn't feel like a wall of information. ----
+    var html = '<div class="job-card job-card-tap" data-view-job="'+esc(j.id)+'">';
     html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
     if (j.assignedEmployees && j.assignedEmployees.length){
       html += '<div class="chips" style="margin-top:6px">'+j.assignedEmployees.map(function(n){return '<span class="pill pill-neutral">'+esc(n)+'</span>';}).join("")+'</div>';
     }
     html += '</div>';
-    var priceBadge = "";
+    html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">';
+    html += '<span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span>';
     if (opts.admin){
+      html += (j.invoiceAmount != null && j.invoiceAmount !== "")
+        ? '<span class="pill pill-success mono">$'+Number(j.invoiceAmount).toFixed(2)+'</span>'
+        : '<span class="pill pill-neutral" style="border:1px dashed var(--line); background:transparent;">No price yet</span>';
+    }
+    html += '</div></div>';
+    html += '<div class="hint" style="margin-top:6px">Tap for full details &rarr;</div>';
+    html += '</div>';
+    return html;
+  }
+
+  function renderJobEditForm(j, opts){
+    var html = '<div class="job-card">';
+    html += '<form id="job-details-form" data-job-id="'+esc(j.id)+'">';
+    html += field("Venue / job site", '<input type="text" name="venue" value="'+esc(j.venue||"")+'" required>');
+    html += field("Job description", '<textarea name="jobDescription" required>'+esc(j.jobDescription||"")+'</textarea>');
+    if (opts.admin){
+      html += field("VTASK number (optional)", '<input type="text" name="vtask" value="'+esc(j.vtask||"")+'">');
+      html += field("Purchase order (optional)", '<input type="text" name="poNumber" value="'+esc(j.poNumber||"")+'">');
+      html += field("Invoice amount ($, optional)", '<input type="number" name="invoiceAmount" step="0.01" min="0" placeholder="e.g. 450.00" value="'+(j.invoiceAmount!=null?esc(j.invoiceAmount):"")+'">');
+      html += field("Comments (optional, management only)", '<textarea name="comments" placeholder="Notes for whoever prices or reviews this job">'+esc(j.comments||"")+'</textarea>');
+    }
+    html += '<div style="display:flex; gap:8px"><button type="submit" class="btn btn-primary" style="flex:1">Save details</button><button type="button" class="btn btn-outline" data-action="cancel-edit-job">Cancel</button></div>';
+    html += '</form>';
+    html += '</div>';
+    return html;
+  }
+
+  // ---------- Job detail view: everything about one job, laid out clearly, one tap away ----------
+  function renderJobDetailView(){
+    var j = state.jobs.filter(function(x){ return x.id === state.viewingJobId; })[0];
+    var backBtn = '<button type="button" class="btn btn-ghost" data-action="close-job-detail" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    if (!j){
+      return '<div class="card">'+backBtn+'<p class="empty-note">That job isn\'t there anymore.</p></div>';
+    }
+    var admin = isAdmin() && state.activeTab === "management";
+    var employeeView = !admin;
+
+    if (state.editingJobId === j.id){
+      return backBtn + renderJobEditForm(j, {admin:admin});
+    }
+
+    var logs = jobLogsFor(j.id);
+    var html = '<div class="card">';
+    html += backBtn;
+
+    html += '<div class="job-head"><div><div class="log-venue" style="font-size:20px">'+esc(j.venue)+'</div>';
+    if (j.assignedEmployees && j.assignedEmployees.length){
+      html += '<div class="chips" style="margin-top:8px">'+j.assignedEmployees.map(function(n){return '<span class="pill pill-neutral">'+esc(n)+'</span>';}).join("")+'</div>';
+    }
+    html += '</div>';
+    var priceBadge = "";
+    if (admin){
       priceBadge = (j.invoiceAmount != null && j.invoiceAmount !== "")
         ? '<button type="button" class="pill pill-success mono" style="border:none; cursor:pointer;" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">$'+Number(j.invoiceAmount).toFixed(2)+'</button>'
         : '<button type="button" class="pill pill-neutral" style="border:1px dashed var(--line); background:transparent; cursor:pointer;" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">+ Add price</button>';
     }
     html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">';
-    if (opts.admin){
+    if (admin){
       html += '<select class="status-select" data-job-status-select="'+esc(j.id)+'">' +
         ["quoted","in-process","completed","invoiced"].map(function(s){ return '<option value="'+s+'" '+(j.status===s?"selected":"")+'>'+statusLabel(s)+'</option>'; }).join("") +
       '</select>';
@@ -821,40 +862,35 @@
     }
     html += priceBadge + '</div></div>';
 
-    html += '<button type="button" class="btn btn-ghost btn-sm" style="padding-left:0; margin-top:4px" data-toggle-job="'+esc(j.id)+'">'+(expanded?"&#9662; Hide details":"&#9656; View details")+'</button>';
-
-    if (!expanded){ html += '</div>'; return html; }
-
-    // ---- Expanded: everything else ----
-    html += '<div style="margin-top:6px; padding-top:10px; border-top:1px solid var(--line);">';
-    if (j.jobDescription) html += '<div class="log-desc">'+esc(j.jobDescription)+'</div>';
+    if (j.jobDescription) html += '<div class="log-desc" style="margin-top:10px; font-size:14.5px">'+esc(j.jobDescription)+'</div>';
     var metaBits = [];
-    if (opts.admin && j.vtask) metaBits.push('VTASK '+esc(j.vtask));
-    if (opts.admin && j.poNumber) metaBits.push('PO '+esc(j.poNumber));
+    if (admin && j.vtask) metaBits.push('VTASK '+esc(j.vtask));
+    if (admin && j.poNumber) metaBits.push('PO '+esc(j.poNumber));
     if (j.client) metaBits.push(esc(j.client));
-    if (metaBits.length) html += '<div class="log-meta">'+metaBits.join(' &middot; ')+'</div>';
-    if (opts.admin && j.comments) html += '<div class="hint" style="margin-top:6px">Notes: '+esc(j.comments)+'</div>';
+    if (metaBits.length) html += '<div class="log-meta" style="margin-top:6px">'+metaBits.join(' &middot; ')+'</div>';
+    if (admin && j.comments) html += '<div class="hint" style="margin-top:8px">Notes: '+esc(j.comments)+'</div>';
 
-    html += '<div class="log-foot">';
-    if (opts.employeeView){ html += '<button type="button" class="btn btn-outline btn-sm" data-add-update="'+esc(j.id)+'">Add update</button>'; }
-    if (opts.admin || opts.employeeView){ html += '<button type="button" class="btn btn-ghost btn-sm" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">Edit job details</button>'; }
+    html += '<div class="log-foot" style="margin-top:14px">';
+    if (employeeView){ html += '<button type="button" class="btn btn-outline btn-sm" data-add-update="'+esc(j.id)+'">Add update</button>'; }
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">Edit job details</button>';
     html += '<button type="button" class="btn btn-ghost btn-sm" data-print-job="'+esc(j.id)+'">Print</button>';
     html += '<button type="button" class="btn btn-ghost btn-sm" data-email-job="'+esc(j.id)+'">Email</button>';
-    if (opts.admin){
+    if (admin){
       html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
     }
     html += '</div>';
 
+    html += '<div class="section-title" style="font-size:16px; margin-top:18px; padding-top:14px; border-top:1px solid var(--line);">Visit history</div>';
     if (logs.length){
       // Group entries by date so two people (or two updates) on the same day
       // read as one block instead of separate near-duplicate-looking rows.
       var byDate = {}, dateOrder = [];
-      logs.slice(0,14).forEach(function(l){
+      logs.slice(0,20).forEach(function(l){
         if (!byDate[l.date]){ byDate[l.date] = []; dateOrder.push(l.date); }
         byDate[l.date].push(l);
       });
       html += '<div class="timeline">';
-      dateOrder.slice(0,8).forEach(function(d){
+      dateOrder.forEach(function(d){
         var entries = byDate[d];
         html += '<div class="timeline-item"><strong>'+fmtDay(d)+'</strong>';
         entries.forEach(function(l, idx){
@@ -870,9 +906,10 @@
         html += '</div>';
       });
       html += '</div>';
+    } else {
+      html += '<p class="empty-note">No updates logged yet.</p>';
     }
-    html += '</div>'; // end expanded body
-    html += '</div>'; // end job-card
+    html += '</div>';
     return html;
   }
 
@@ -947,16 +984,24 @@
     return html;
   }
 
-  // ---------- For Drew: jobs Grace has flagged for pricing, that don't have a price yet ----------
-  function renderForDrew(){
-    var list = state.jobs.filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
-    list.sort(function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); });
+  // ---------- Pricing: jobs sent to Drew, and jobs he's already priced ----------
+  function renderPricing(){
+    var awaiting = state.jobs.filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
+    var priced = state.jobs.filter(function(j){ return j.invoiceAmount != null && j.invoiceAmount !== "" && j.status !== "invoiced"; });
+    var byRecent = function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); };
+    awaiting.sort(byRecent);
+    priced.sort(byRecent);
 
     var html = '<div class="card">';
-    html += '<div class="section-title">For Drew</div><p class="section-sub">Jobs sent through for pricing. Add the price (and a comment if useful) and the job drops off this list on its own.</p>';
-    if (list.length===0){ html += '<p class="empty-note">Nothing waiting on a price right now.</p>'; }
+    html += '<div class="section-title">Awaiting price</div><p class="section-sub">Jobs sent through for Drew (or anyone in management) to price.</p>';
+    if (awaiting.length===0){ html += '<p class="empty-note">Nothing waiting on a price right now.</p>'; }
     html += '</div>';
-    list.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
+    awaiting.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
+
+    html += '<div class="card" style="margin-top:20px"><div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Jobs tab.</p>';
+    if (priced.length===0){ html += '<p class="empty-note">Nothing priced and waiting right now.</p>'; }
+    html += '</div>';
+    priced.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
     return html;
   }
 
@@ -1159,7 +1204,7 @@
 
   // ---------- events ----------
   function bindEvents(){
-    root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editingJobId=null; render(); }); });
+    root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editingJobId=null; state.viewingJobId=null; render(); }); });
     root.querySelectorAll("[data-mgmt]").forEach(function(b){ b.addEventListener("click", function(){ state.mgmtSub=b.getAttribute("data-mgmt"); render(); }); });
 
     var logoutBtn = root.querySelector('[data-action="logout"]');
@@ -1234,11 +1279,9 @@
     root.querySelectorAll("[data-job-status-select]").forEach(function(sel){
       sel.addEventListener("change", function(){ setJobStatus(sel.getAttribute("data-job-status-select"), sel.value); });
     });
-    root.querySelectorAll("[data-toggle-job]").forEach(function(b){ b.addEventListener("click", function(){
-      var id = b.getAttribute("data-toggle-job");
-      state.expandedJobs[id] = !state.expandedJobs[id];
-      render();
-    }); });
+    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); render(); }); });
+    var closeJobDetailBtn = root.querySelector('[data-action="close-job-detail"]');
+    if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){ state.viewingJobId=null; state.editingJobId=null; render(); });
     root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
     root.querySelectorAll("[data-email-job]").forEach(function(b){ b.addEventListener("click", function(){ emailJob(b.getAttribute("data-email-job")); }); });
     root.querySelectorAll("[data-email-ts]").forEach(function(b){ b.addEventListener("click", function(){ emailTimesheetFor(b.getAttribute("data-email-ts")); }); });
