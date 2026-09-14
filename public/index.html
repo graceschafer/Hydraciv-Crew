@@ -829,7 +829,7 @@
       '<button type="button" data-val="unpaid" class="'+(type==="unpaid"?"on":"")+'">Leave without pay</button>' +
     '</div></div>';
     html += field("Date", '<input type="date" name="date" value="'+esc(isEdit?(leave.date||todayStr()):todayStr())+'" required>');
-    html += '<button type="submit" class="btn btn-primary btn-block" id="leave-submit-btn" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Saving…":(isEdit?"Save changes":"Log leave day ("+leaveHours(type).toFixed(1)+"h)"))+'</button>';
+    html += '<button type="submit" class="btn btn-primary btn-block" id="leave-submit-btn" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Saving…":(isEdit?"Save changes":"Log leave day"))+'</button>';
     html += '</form></div>';
     return html;
   }
@@ -1663,15 +1663,6 @@
           }
           if (name === "crewRole"){ state.crewRole = b.getAttribute("data-val"); }
           if (name === "jobsFilter"){ state.jobsStatusFilter = b.getAttribute("data-val"); render(); }
-          if (name === "leaveType"){
-            var leaveType = b.getAttribute("data-val");
-            var subEl = document.getElementById("leave-hours-sub");
-            if (subEl) subEl.textContent = leaveSubText(leaveType);
-            var submitBtn = document.getElementById("leave-submit-btn");
-            if (submitBtn && document.getElementById("leave-form").getAttribute("data-mode") !== "edit"){
-              submitBtn.textContent = "Log leave day ("+leaveHours(leaveType).toFixed(1)+"h)";
-            }
-          }
         });
       });
     });
