@@ -819,7 +819,6 @@
     var type = isEdit ? (leave.type || "sick") : "sick";
     var html = '<div class="card">';
     html += '<div class="section-title">'+(isEdit?"Edit leave day":"Add a leave day")+'</div>';
-    html += '<p class="section-sub" id="leave-hours-sub">'+leaveSubText(type)+'</p>';
     html += '<button type="button" class="btn btn-ghost" data-action="back-to-list" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
     html += '<form id="leave-form" data-mode="'+opts.mode+'" '+(isEdit?('data-leave-id="'+esc(leave.id)+'"'):'')+'>';
     html += '<div class="field"><label>Type</label><div class="seg" data-seg="leaveType">' +
