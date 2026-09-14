@@ -273,11 +273,16 @@
   var db = null;
   var dbStatus = "loading"; // loading | ready | unavailable
 
+  // sessionStorage (not localStorage) on purpose — it clears itself when the
+  // tab/app is actually closed, so nobody stays signed in to someone else's
+  // login just by reopening the app. A reload of the same open tab still
+  // keeps you logged in (so an accidental refresh mid-job doesn't boot you).
   function loadSession(){
-    try{ var raw = localStorage.getItem(LS_SESSION); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
+    try{ localStorage.removeItem(LS_SESSION); }catch(e){} // one-off cleanup of the old always-logged-in behaviour
+    try{ var raw = sessionStorage.getItem(LS_SESSION); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
   }
-  function saveSession(s){ try{ localStorage.setItem(LS_SESSION, JSON.stringify(s)); }catch(e){} }
-  function clearSession(){ try{ localStorage.removeItem(LS_SESSION); }catch(e){} }
+  function saveSession(s){ try{ sessionStorage.setItem(LS_SESSION, JSON.stringify(s)); }catch(e){} }
+  function clearSession(){ try{ sessionStorage.removeItem(LS_SESSION); }catch(e){} }
 
   var state = {
     crew: [], jobs: [], jobLogs: [], logins: [],
