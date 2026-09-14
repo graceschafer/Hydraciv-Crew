@@ -306,6 +306,7 @@
     notifyEmail: "", notifyEmailMsg: null,
     editingCrewId: null, crewFormError: "",
     glossaryOpen: false,
+    leaveLogs: [], editLeaveId: null, leaveType: "sick",
   };
 
   function esc(s){
@@ -329,6 +330,33 @@
   }
   function inRange(d,a,b){ return d>=a && d<=b; }
   function numHours(v){ var n = parseFloat(v); return isNaN(n) ? 0 : n; }
+
+  // ---------- Leave (sick / annual / trade school) — a fixed 7.6h day, no job attached ----------
+  var LEAVE_TYPES = { sick: "Sick day", annual: "Annual leave", trade: "Trade school" };
+  var LEAVE_HOURS = 7.6;
+  function leaveLabel(type){ return LEAVE_TYPES[type] || "Leave"; }
+
+  // Leave entries for one person in one week, reshaped to look like a job-log
+  // row (date/hours/venue/completed) so timesheet rendering, print, email and
+  // copy can all treat a leave day exactly like a logged job without extra cases.
+  function leaveEntriesFor(name, wk){
+    return state.leaveLogs
+      .filter(function(l){ return l.employee === name && inRange(l.date, wk.startStr, wk.endStr); })
+      .map(function(l){ return { id: l.id, date: l.date, hours: LEAVE_HOURS, completed: true, venue: leaveLabel(l.type), isLeave: true, leaveType: l.type }; });
+  }
+  function weeklyEntriesFor(name, wk){
+    var jobEntries = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(name) !== -1; });
+    return jobEntries.concat(leaveEntriesFor(name, wk));
+  }
+  // Everyone who has either a job log or a leave day in the given week —
+  // renderTimesheets needs this instead of deriving names from job logs
+  // alone, or someone who was only on leave all week wouldn't show up at all.
+  function weekEmployeeNames(wk){
+    var names = {};
+    state.jobLogs.forEach(function(l){ if (inRange(l.date, wk.startStr, wk.endStr)) (l.employees||[]).forEach(function(n){ names[n]=1; }); });
+    state.leaveLogs.forEach(function(l){ if (inRange(l.date, wk.startStr, wk.endStr)) names[l.employee]=1; });
+    return Object.keys(names).sort();
+  }
   function statusLabel(s){ return {quoted:"Quoted","in-process":"In process",completed:"Completed",invoiced:"Invoiced"}[s] || "Quoted"; }
   function statusPillClass(s){ return {quoted:"pill-violet","in-process":"pill-accent",completed:"pill-success",invoiced:"pill-ink"}[s] || "pill-violet"; }
 
@@ -412,6 +440,7 @@
     var logs = jobLogsFor(j.id).slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
     var rowsHtml = logs.map(function(l){
       var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
+      if (l.timeRange) hrs += " (" + esc(l.timeRange) + ")";
       var extraBits = [];
       if (l.materials) extraBits.push("Materials: "+esc(l.materials));
       if (l.alsoOnsite) extraBits.push("Also onsite: "+esc(l.alsoOnsite));
@@ -437,7 +466,7 @@
   function emailTimesheetFor(name){
     if (!emailjsReady){ toast("Email isn't set up yet."); return; }
     var wk = weekBounds(state.tsWeekOffset);
-    var logs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(name) !== -1; });
+    var logs = weeklyEntriesFor(name, wk);
     logs.sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
     var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
     var rowsHtml = logs.map(function(l){
@@ -446,7 +475,7 @@
         '<td style="padding:6px 0;">'+esc(l.venue||"")+'</td>' +
         '<td style="padding:6px 0;text-align:right;font-family:monospace;">'+hrs+'h</td></tr>';
     }).join("");
-    var bodyHtml = '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">' + (rowsHtml || '<tr><td style="padding:6px 0;color:#7d8d94;">No jobs logged this week.</td></tr>') + '</table>' +
+    var bodyHtml = '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">' + (rowsHtml || '<tr><td style="padding:6px 0;color:#7d8d94;">Nothing logged this week.</td></tr>') + '</table>' +
       '<p style="text-align:right;font-weight:700;margin-top:14px;color:#123f5c;">Total: '+total.toFixed(1)+'h</p>';
     var headerHtml = '<h1 style="margin:0;font-size:22px;font-weight:800;color:#fff;">'+esc(name)+' &mdash; Timesheet</h1>' +
       '<p style="margin:6px 0 0;font-size:13px;color:#cfe6f4;">'+esc(fmtShort(wk.startStr))+' to '+esc(fmtShort(wk.endStr))+'</p>';
@@ -485,6 +514,8 @@
       html += renderChangePinView();
     } else if (state.editLogId){
       html += renderEditLogView();
+    } else if (state.editLeaveId){
+      html += renderLeaveEditView();
     } else if (state.mergeSourceId){
       html += renderMergePicker();
     } else if (state.viewingJobId){
@@ -586,11 +617,16 @@
       var job = state.jobs.filter(function(j){ return j.id === state.updateJobId; })[0];
       if (job){ html += renderJobForm({mode:"update", job:job}); return html + renderRecentForMe(me); }
     }
+    if (state.logView === "leave"){
+      html += renderLeaveForm({mode:"new"});
+      return html + renderRecentForMe(me);
+    }
 
     html += '<div class="card">';
     html += '<div class="section-title">Your jobs</div>';
-    html += '<p class="section-sub">Not finished yet? Add an update instead of starting a new one.</p>';
-    html += '<button class="btn btn-primary btn-block" style="margin-bottom:14px" data-action="new-job">Start a new job</button>';
+    html += '<p class="section-sub">Not finished yet? Add an update instead of starting a new one. Taking sick, annual, or trade-school leave? Use the leave button instead — it\'s not a job.</p>';
+    html += '<button class="btn btn-primary btn-block" style="margin-bottom:8px" data-action="new-job">Start a new job</button>';
+    html += '<button class="btn btn-outline btn-block" style="margin-bottom:14px" data-action="new-leave">Add a leave day</button>';
 
     var mine = myJobs(me);
     var notFinished = mine.filter(function(j){ return j.open !== false; });
@@ -611,6 +647,7 @@
       list.forEach(function(j){ html += renderJobCard(j, {employeeView:true}); });
     }
     html += '</div>';
+    html += renderRecentLeaveForMe(me);
     return html;
   }
 
@@ -665,6 +702,7 @@
     html += field("Date", '<input type="date" name="date" value="'+esc(isEdit?(log.date||todayStr()):todayStr())+'" required>');
     html += field("Hours worked", '<input type="text" name="hours" value="'+esc(isEdit?(log.hours||""):"")+'" placeholder="e.g. 6.5 or 6.5h" required>');
     html += '</div>';
+    html += field("Time (optional)", '<input type="text" name="timeRange" value="'+(isEdit?esc(log.timeRange||""):"")+'" placeholder="e.g. 7am–10am">');
 
     var loggedUnder = isEdit ? (log.submittedBy || (log.employees && log.employees[0]) || "") : state.session.name;
     html += '<div class="field"><label>Logged under</label><p class="hint" style="margin:2px 0 0">'+esc(loggedUnder)+'\'s timesheet. Ticking or typing someone else\'s name here won\'t add hours to their sheet.</p></div>';
@@ -691,6 +729,15 @@
     if (!log){ return '<div class="card"><p class="empty-note">That entry isn\'t there anymore.</p><button type="button" class="btn btn-outline" data-action="back-to-list">&larr; Back</button></div>'; }
     var job = state.jobs.filter(function(j){ return j.id === log.jobId; })[0];
     return renderJobForm({mode:"edit", job:job, log:log});
+  }
+
+  // Top-level route (like renderEditLogView) so editing a leave day works no
+  // matter where the edit link was clicked from — a crew member's own list,
+  // or a manager's "Edit" link on someone's leave row in Timesheets.
+  function renderLeaveEditView(){
+    var leave = state.leaveLogs.filter(function(l){ return l.id === state.editLeaveId; })[0];
+    if (!leave){ return '<div class="card"><p class="empty-note">That entry isn\'t there anymore.</p><button type="button" class="btn btn-outline" data-action="back-to-list">&larr; Back</button></div>'; }
+    return renderLeaveForm({mode:"edit", leave:leave});
   }
 
   function renderChangePinView(){
@@ -734,7 +781,74 @@
     if (mine.length === 0){ html += '<p class="empty-note">Nothing logged yet.</p>'; }
     else { mine.forEach(function(l){ html += renderLogCard(l, {compact:true, editable:true}); }); }
     html += '</div>';
+    html += renderRecentLeaveForMe(me);
     return html;
+  }
+
+  function renderRecentLeaveForMe(me){
+    var mine = state.leaveLogs.filter(function(l){ return l.employee === me; })
+      .slice().sort(function(a,b){ return (b.date||"").localeCompare(a.date||""); }).slice(0,5);
+    if (mine.length === 0) return "";
+    var html = '<div class="card"><div class="section-title" style="font-size:17px">Your recent leave</div>';
+    mine.forEach(function(l){
+      html += '<div class="log-card"><div class="log-top"><div><div class="log-venue">'+esc(leaveLabel(l.type))+'</div>' +
+        '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+LEAVE_HOURS.toFixed(1)+'h</span></div></div></div>' +
+        '<div class="log-foot"><button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" data-edit-leave="'+esc(l.id)+'">Edit</button></div>' +
+      '</div>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function renderLeaveForm(opts){
+    var leave = opts.leave || {};
+    var isEdit = opts.mode === "edit";
+    var type = isEdit ? (leave.type || "sick") : "sick";
+    var html = '<div class="card">';
+    html += '<div class="section-title">'+(isEdit?"Edit leave day":"Add a leave day")+'</div>';
+    html += '<p class="section-sub">This isn\'t a job — it just adds a fixed '+LEAVE_HOURS.toFixed(1)+'h to your timesheet for the date you pick.</p>';
+    html += '<button type="button" class="btn btn-ghost" data-action="back-to-list" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    html += '<form id="leave-form" data-mode="'+opts.mode+'" '+(isEdit?('data-leave-id="'+esc(leave.id)+'"'):'')+'>';
+    html += '<div class="field"><label>Type</label><div class="seg" data-seg="leaveType">' +
+      '<button type="button" data-val="sick" class="'+(type==="sick"?"on":"")+'">Sick day</button>' +
+      '<button type="button" data-val="annual" class="'+(type==="annual"?"on":"")+'">Annual leave</button>' +
+      '<button type="button" data-val="trade" class="'+(type==="trade"?"on":"")+'">Trade school</button>' +
+    '</div></div>';
+    html += field("Date", '<input type="date" name="date" value="'+esc(isEdit?(leave.date||todayStr()):todayStr())+'" required>');
+    html += '<button type="submit" class="btn btn-primary btn-block" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Saving…":(isEdit?"Save changes":"Log leave day ("+LEAVE_HOURS.toFixed(1)+"h)"))+'</button>';
+    html += '</form></div>';
+    return html;
+  }
+
+  function onSubmitLeaveForm(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var mode = f.getAttribute("data-mode");
+    var date = f.date.value;
+    var typeOn = root.querySelector('#leave-form [data-seg="leaveType"] .on');
+    var type = typeOn ? typeOn.getAttribute("data-val") : "sick";
+    if (!date) return;
+    state.formBusy = true; render();
+    var p;
+    if (mode === "edit"){
+      var id = f.getAttribute("data-leave-id");
+      p = db.collection("leave-logs").doc(id).update({type: type, date: date});
+    } else {
+      p = db.collection("leave-logs").add({
+        employee: state.session.name, type: type, date: date, hours: LEAVE_HOURS,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    p.then(function(){
+      state.formBusy = false; state.logView = "list"; state.editLeaveId = null;
+      toast(mode === "edit" ? "Leave day updated" : leaveLabel(type) + " logged");
+      render();
+    }).catch(function(){
+      state.formBusy = false;
+      toast("Couldn't save that — try again.");
+      render();
+    });
   }
 
   function renderLogCard(l, opts){
@@ -742,7 +856,7 @@
     var statusPill = l.completed ? '<span class="pill pill-success">Completed</span>' : '<span class="pill pill-warning">Follow-up needed</span>';
     var html = '<div class="log-card">';
     html += '<div class="log-top"><div><div class="log-venue">'+esc(l.venue)+'</div><div class="log-desc">'+esc(l.jobDescription||"")+'</div>';
-    html += '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span> &middot; '+esc((l.employees||[]).join(", "))+'</div></div>';
+    html += '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span>'+(l.timeRange?' ('+esc(l.timeRange)+')':'')+' &middot; '+esc((l.employees||[]).join(", "))+'</div></div>';
     html += '<div style="text-align:right">'+statusPill+'</div></div>';
     if (l.materials){ html += '<div class="log-body"><strong>Materials:</strong> '+esc(l.materials)+'</div>'; }
     if (!l.completed){ html += '<div class="log-followup"><strong>Est. return:</strong> '+(l.estimatedReturn?fmtShort(l.estimatedReturn):"—")+'<br><strong>Still to do:</strong> '+esc(l.remainingWork||"—")+'</div>'; }
@@ -960,8 +1074,12 @@
     html += '<div class="log-foot" style="margin-top:14px">';
     if (employeeView){ html += '<button type="button" class="btn btn-outline btn-sm" data-add-update="'+esc(j.id)+'">Add update</button>'; }
     html += '<button type="button" class="btn btn-ghost btn-sm" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">Edit job details</button>';
-    html += '<button type="button" class="btn btn-ghost btn-sm" data-print-job="'+esc(j.id)+'">Print</button>';
-    html += '<button type="button" class="btn btn-ghost btn-sm" data-email-job="'+esc(j.id)+'">Email</button>';
+    // Print/Email are office paperwork actions — once a job's done, a crew
+    // member looking back at it from their Completed tab doesn't need them.
+    if (admin || j.open !== false){
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-print-job="'+esc(j.id)+'">Print</button>';
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-email-job="'+esc(j.id)+'">Email</button>';
+    }
     if (admin){
       html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
       html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-merge" data-job-id="'+esc(j.id)+'">Merge into another job&hellip;</button>';
@@ -992,7 +1110,7 @@
         html += '<div class="timeline-item"><strong>'+fmtDay(d)+'</strong>';
         entries.forEach(function(l, idx){
           html += '<div style="margin-top:4px;'+(idx>0?' padding-top:6px; border-top:1px dashed var(--line);':'')+'">' +
-            '<span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span> &middot; '+esc(l.submittedBy||"")+
+            '<span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span>'+(l.timeRange?' <span class="hint">('+esc(l.timeRange)+')</span>':'')+' &middot; '+esc(l.submittedBy||"")+
             (l.completed ? ' &middot; <span class="pill pill-success" style="padding:2px 7px">Completed</span>' : ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>') +
             (l.materials ? '<br><span class="hint">Materials: '+esc(l.materials)+'</span>' : '') +
             (l.alsoOnsite ? '<br><span class="hint">Also onsite: '+esc(l.alsoOnsite)+'</span>' : '') +
@@ -1245,23 +1363,20 @@
 
   function renderTimesheets(){
     var wk = weekBounds(state.tsWeekOffset);
-    var weekLogs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr); });
-    var byEmp = {};
-    weekLogs.forEach(function(l){ (l.employees||[]).forEach(function(name){ (byEmp[name]=byEmp[name]||[]).push(l); }); });
-    var names = Object.keys(byEmp).sort();
+    var names = weekEmployeeNames(wk);
 
     var html = '<div class="card">';
-    html += '<div><div class="section-title">Timesheets</div><p class="section-sub" style="margin-bottom:0">One block per crew member for the week below — hit Copy, then paste into an email.</p></div>';
+    html += '<div><div class="section-title">Timesheets</div><p class="section-sub" style="margin-bottom:0">One block per crew member for the week below — hit Copy, then paste into an email. Sick/annual/trade-school days show up here too, at a fixed '+LEAVE_HOURS.toFixed(1)+'h.</p></div>';
     html += '<div class="weeknav" style="margin-top:14px"><button data-ts-week="-1">&larr;</button><div class="label">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div><button data-ts-week="1">&rarr;</button></div>';
     html += '</div>';
 
     if (names.length === 0){
-      html += '<div class="card"><p class="empty-note">No jobs logged by anyone this week.</p></div>';
+      html += '<div class="card"><p class="empty-note">Nothing logged by anyone this week.</p></div>';
       return html;
     }
 
     names.forEach(function(name){
-      var logs = byEmp[name].slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+      var logs = weeklyEntriesFor(name, wk).sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
       var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
       html += '<div class="card">';
       html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">' +
@@ -1274,7 +1389,7 @@
       html += '<div class="timeline" style="margin-top:12px">' + logs.map(function(l){
         var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
         return '<div class="timeline-item"><strong>'+fmtDay(l.date)+'</strong> &middot; '+esc(l.venue||"")+' &middot; <span class="mono">'+hrs+'h</span>' +
-          (!l.completed ? ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>' : '') +
+          (l.isLeave ? ' &middot; <span class="pill pill-accent" style="padding:2px 7px">Leave</span>'+(isAdmin()?' <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px" data-edit-leave="'+esc(l.id)+'">Edit</button>':'') : (!l.completed ? ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>' : '')) +
         '</div>';
       }).join("") + '</div>';
       html += '</div>';
@@ -1292,7 +1407,7 @@
     logs.forEach(function(l){
       var hrs = (l.hours!=null && l.hours!=="") ? l.hours : "?";
       var line = fmtDay(l.date) + ": " + (l.venue||"") + " - " + hrs + "h";
-      if (!l.completed) line += " (follow-up needed)";
+      if (!l.completed && !l.isLeave) line += " (follow-up needed)";
       lines.push(line);
     });
     lines.push("");
@@ -1302,7 +1417,7 @@
 
   function copyTimesheetFor(name){
     var wk = weekBounds(state.tsWeekOffset);
-    var logs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(name) !== -1; });
+    var logs = weeklyEntriesFor(name, wk);
     logs.sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
     var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
     var text = buildTimesheetText(name, wk, logs, total);
@@ -1349,12 +1464,12 @@
     var rows = logs.map(function(l){
       var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
       return '<div class="p-row"><div><strong>'+fmtDay(l.date)+'</strong> &middot; '+esc(l.venue||"")+
-        (!l.completed ? ' <span class="p-flag">(follow-up needed)</span>' : '') +
+        (!l.completed && !l.isLeave ? ' <span class="p-flag">(follow-up needed)</span>' : '') +
         '</div><div class="mono">'+hrs+'h</div></div>';
     }).join("");
     return (
       '<div class="p-head"><h1>'+esc(name)+' &mdash; Timesheet</h1><div class="p-sub">'+esc(fmtShort(wk.startStr))+' to '+esc(fmtShort(wk.endStr))+'</div></div>' +
-      (rows || '<p class="empty-note">No jobs logged this week.</p>') +
+      (rows || '<p class="empty-note">Nothing logged this week.</p>') +
       '<div class="p-total">Total: '+total.toFixed(1)+'h</div>' +
       printFooter()
     );
@@ -1362,7 +1477,7 @@
 
   function printTimesheetFor(name){
     var wk = weekBounds(state.tsWeekOffset);
-    var logs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(name) !== -1; });
+    var logs = weeklyEntriesFor(name, wk);
     logs.sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
     var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
     openPrintArea(buildTimesheetPrintHTML(name, wk, logs, total));
@@ -1379,6 +1494,7 @@
     if (isAdmin() && j.invoiceAmount != null && j.invoiceAmount !== "") metaBits.push("Invoice: $" + Number(j.invoiceAmount).toFixed(2));
     var rows = logs.map(function(l){
       var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
+      if (l.timeRange) hrs += ' <span class="p-flag">('+esc(l.timeRange)+')</span>';
       var extra = "";
       if (l.materials) extra += '<div class="p-meta">Materials: '+esc(l.materials)+'</div>';
       if (l.alsoOnsite) extra += '<div class="p-meta">Also onsite: '+esc(l.alsoOnsite)+'</div>';
@@ -1470,7 +1586,7 @@
 
   // ---------- events ----------
   function bindEvents(){
-    root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editingJobId=null; state.viewingJobId=null; render(); }); });
+    root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.editingJobId=null; state.viewingJobId=null; render(); }); });
     root.querySelectorAll("[data-mgmt]").forEach(function(b){ b.addEventListener("click", function(){ state.mgmtSub=b.getAttribute("data-mgmt"); render(); }); });
 
     var logoutBtn = root.querySelector('[data-action="logout"]');
@@ -1504,8 +1620,14 @@
     if (newJobBtn) newJobBtn.addEventListener("click", function(){ state.logView="new"; state.formMsg=null; render(); });
     root.querySelectorAll("[data-add-update]").forEach(function(b){ b.addEventListener("click", function(){ state.logView="update"; state.updateJobId=b.getAttribute("data-add-update"); state.formMsg=null; render(); }); });
     var backBtn = root.querySelector('[data-action="back-to-list"]');
-    if (backBtn) backBtn.addEventListener("click", function(){ state.logView="list"; state.editLogId=null; render(); });
+    if (backBtn) backBtn.addEventListener("click", function(){ state.logView="list"; state.editLogId=null; state.editLeaveId=null; render(); });
     root.querySelectorAll("[data-edit-log]").forEach(function(b){ b.addEventListener("click", function(){ state.editLogId=b.getAttribute("data-edit-log"); state.formMsg=null; render(); }); });
+
+    var newLeaveBtn = root.querySelector('[data-action="new-leave"]');
+    if (newLeaveBtn) newLeaveBtn.addEventListener("click", function(){ state.logView="leave"; render(); });
+    root.querySelectorAll("[data-edit-leave]").forEach(function(b){ b.addEventListener("click", function(){ state.editLeaveId=b.getAttribute("data-edit-leave"); state.logView="editLeave"; render(); }); });
+    var leaveForm = document.getElementById("leave-form");
+    if (leaveForm) leaveForm.addEventListener("submit", onSubmitLeaveForm);
 
     // job details edit (venue/description/type/PO)
     root.querySelectorAll('[data-action="edit-job-details"]').forEach(function(b){ b.addEventListener("click", function(){ state.editingJobId=b.getAttribute("data-job-id"); render(); }); });
@@ -1735,6 +1857,7 @@
     var jobDescription = f.jobDescription.value.trim();
     var date = f.date.value;
     var hours = f.hours.value.trim();
+    var timeRange = f.timeRange ? f.timeRange.value.trim() : "";
     var completed = root.querySelector('#job-form [data-seg="completed"] .on').getAttribute("data-val") === "yes";
     var employees = [state.session.name];
     var alsoOnsite = f.alsoOnsite ? f.alsoOnsite.value.trim() : "";
@@ -1767,7 +1890,7 @@
 
     function afterLog(jobId, venue){
       var logBody = {
-        jobId: jobId, venue: venue, date: date, hours: hours, jobDescription: jobDescription,
+        jobId: jobId, venue: venue, date: date, hours: hours, timeRange: timeRange, jobDescription: jobDescription,
         materials: materials, completed: completed, alsoOnsite: alsoOnsite,
         estimatedReturn: completed ? "" : estimatedReturn, remainingWork: completed ? "" : remainingWork,
         employees: employees, submittedBy: state.session.name, submittedAt: new Date().toISOString(),
@@ -1800,7 +1923,7 @@
       var editLogId = f.getAttribute("data-log-id");
       var editJobId = f.getAttribute("data-job-id");
       var patch = {
-        date: date, hours: hours, jobDescription: jobDescription, materials: materials, completed: completed, alsoOnsite: alsoOnsite,
+        date: date, hours: hours, timeRange: timeRange, jobDescription: jobDescription, materials: materials, completed: completed, alsoOnsite: alsoOnsite,
         estimatedReturn: completed ? "" : estimatedReturn, remainingWork: completed ? "" : remainingWork,
         editedBy: state.session.name, editedAt: new Date().toISOString(),
       };
@@ -1978,6 +2101,11 @@
 
       db.collection("job-logs").orderBy("submittedAt","desc").limit(1000).onSnapshot(function(snap){
         state.jobLogs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, onListenerError);
+
+      db.collection("leave-logs").orderBy("createdAt","desc").limit(1000).onSnapshot(function(snap){
+        state.leaveLogs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         render();
       }, onListenerError);
 
