@@ -331,10 +331,17 @@
   function inRange(d,a,b){ return d>=a && d<=b; }
   function numHours(v){ var n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
-  // ---------- Leave (sick / annual / trade school) — a fixed 7.6h day, no job attached ----------
-  var LEAVE_TYPES = { sick: "Sick day", annual: "Annual leave", trade: "Trade school" };
-  var LEAVE_HOURS = 7.6;
-  function leaveLabel(type){ return LEAVE_TYPES[type] || "Leave"; }
+  // ---------- Leave (sick / annual / trade school / public holiday / unpaid) — a fixed number
+  // of hours per type (0 for unpaid), no job attached ----------
+  var LEAVE_TYPES = {
+    sick:   { label: "Sick day",          hours: 7.6 },
+    annual: { label: "Annual leave",      hours: 7.6 },
+    trade:  { label: "Trade school",      hours: 7.6 },
+    public: { label: "Public holiday",    hours: 7.6 },
+    unpaid: { label: "Leave without pay", hours: 0 },
+  };
+  function leaveLabel(type){ return (LEAVE_TYPES[type] && LEAVE_TYPES[type].label) || "Leave"; }
+  function leaveHours(type){ return (LEAVE_TYPES[type] ? LEAVE_TYPES[type].hours : 0); }
 
   // Leave entries for one person in one week, reshaped to look like a job-log
   // row (date/hours/venue/completed) so timesheet rendering, print, email and
@@ -342,7 +349,7 @@
   function leaveEntriesFor(name, wk){
     return state.leaveLogs
       .filter(function(l){ return l.employee === name && inRange(l.date, wk.startStr, wk.endStr); })
-      .map(function(l){ return { id: l.id, date: l.date, hours: LEAVE_HOURS, completed: true, venue: leaveLabel(l.type), isLeave: true, leaveType: l.type }; });
+      .map(function(l){ return { id: l.id, date: l.date, hours: leaveHours(l.type), completed: true, venue: leaveLabel(l.type), isLeave: true, leaveType: l.type }; });
   }
   function weeklyEntriesFor(name, wk){
     var jobEntries = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(name) !== -1; });
@@ -792,12 +799,18 @@
     var html = '<div class="card"><div class="section-title" style="font-size:17px">Your recent leave</div>';
     mine.forEach(function(l){
       html += '<div class="log-card"><div class="log-top"><div><div class="log-venue">'+esc(leaveLabel(l.type))+'</div>' +
-        '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+LEAVE_HOURS.toFixed(1)+'h</span></div></div></div>' +
+        '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+leaveHours(l.type).toFixed(1)+'h</span></div></div></div>' +
         '<div class="log-foot"><button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" data-edit-leave="'+esc(l.id)+'">Edit</button></div>' +
       '</div>';
     });
     html += '</div>';
     return html;
+  }
+
+  function leaveSubText(type){
+    var hrs = leaveHours(type);
+    if (hrs <= 0) return "This isn't a job — it won't add any paid hours, it just marks the date as leave without pay.";
+    return "This isn't a job — it just adds a fixed "+hrs.toFixed(1)+"h to your timesheet for the date you pick.";
   }
 
   function renderLeaveForm(opts){
@@ -806,16 +819,18 @@
     var type = isEdit ? (leave.type || "sick") : "sick";
     var html = '<div class="card">';
     html += '<div class="section-title">'+(isEdit?"Edit leave day":"Add a leave day")+'</div>';
-    html += '<p class="section-sub">This isn\'t a job — it just adds a fixed '+LEAVE_HOURS.toFixed(1)+'h to your timesheet for the date you pick.</p>';
+    html += '<p class="section-sub" id="leave-hours-sub">'+leaveSubText(type)+'</p>';
     html += '<button type="button" class="btn btn-ghost" data-action="back-to-list" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
     html += '<form id="leave-form" data-mode="'+opts.mode+'" '+(isEdit?('data-leave-id="'+esc(leave.id)+'"'):'')+'>';
     html += '<div class="field"><label>Type</label><div class="seg" data-seg="leaveType">' +
       '<button type="button" data-val="sick" class="'+(type==="sick"?"on":"")+'">Sick day</button>' +
       '<button type="button" data-val="annual" class="'+(type==="annual"?"on":"")+'">Annual leave</button>' +
       '<button type="button" data-val="trade" class="'+(type==="trade"?"on":"")+'">Trade school</button>' +
+      '<button type="button" data-val="public" class="'+(type==="public"?"on":"")+'">Public holiday</button>' +
+      '<button type="button" data-val="unpaid" class="'+(type==="unpaid"?"on":"")+'">Leave without pay</button>' +
     '</div></div>';
     html += field("Date", '<input type="date" name="date" value="'+esc(isEdit?(leave.date||todayStr()):todayStr())+'" required>');
-    html += '<button type="submit" class="btn btn-primary btn-block" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Saving…":(isEdit?"Save changes":"Log leave day ("+LEAVE_HOURS.toFixed(1)+"h)"))+'</button>';
+    html += '<button type="submit" class="btn btn-primary btn-block" id="leave-submit-btn" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Saving…":(isEdit?"Save changes":"Log leave day ("+leaveHours(type).toFixed(1)+"h)"))+'</button>';
     html += '</form></div>';
     return html;
   }
@@ -836,7 +851,7 @@
       p = db.collection("leave-logs").doc(id).update({type: type, date: date});
     } else {
       p = db.collection("leave-logs").add({
-        employee: state.session.name, type: type, date: date, hours: LEAVE_HOURS,
+        employee: state.session.name, type: type, date: date, hours: leaveHours(type),
         createdAt: new Date().toISOString(),
       });
     }
@@ -1366,7 +1381,7 @@
     var names = weekEmployeeNames(wk);
 
     var html = '<div class="card">';
-    html += '<div><div class="section-title">Timesheets</div><p class="section-sub" style="margin-bottom:0">One block per crew member for the week below — hit Copy, then paste into an email. Sick/annual/trade-school days show up here too, at a fixed '+LEAVE_HOURS.toFixed(1)+'h.</p></div>';
+    html += '<div><div class="section-title">Timesheets</div><p class="section-sub" style="margin-bottom:0">One block per crew member for the week below — hit Copy, then paste into an email. Leave days (sick, annual, trade school, public holiday) show up here too at 7.6h, and leave without pay at 0h.</p></div>';
     html += '<div class="weeknav" style="margin-top:14px"><button data-ts-week="-1">&larr;</button><div class="label">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div><button data-ts-week="1">&rarr;</button></div>';
     html += '</div>';
 
@@ -1649,6 +1664,15 @@
           }
           if (name === "crewRole"){ state.crewRole = b.getAttribute("data-val"); }
           if (name === "jobsFilter"){ state.jobsStatusFilter = b.getAttribute("data-val"); render(); }
+          if (name === "leaveType"){
+            var leaveType = b.getAttribute("data-val");
+            var subEl = document.getElementById("leave-hours-sub");
+            if (subEl) subEl.textContent = leaveSubText(leaveType);
+            var submitBtn = document.getElementById("leave-submit-btn");
+            if (submitBtn && document.getElementById("leave-form").getAttribute("data-mode") !== "edit"){
+              submitBtn.textContent = "Log leave day ("+leaveHours(leaveType).toFixed(1)+"h)";
+            }
+          }
         });
       });
     });
