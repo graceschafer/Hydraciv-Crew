@@ -24,7 +24,7 @@
     --ground:#eef2f2; --surface:#ffffff; --surface-2:#e2e9eb; --surface-3:#d7e0e2;
     --ink:#16222b; --ink-soft:#55676f; --ink-faint:#7d8d94; --line:#ccd7da;
     --accent:#1c5c86; --accent-strong:#123f5c; --accent-soft:#e1edf3; --accent-ink:#ffffff;
-    --amber:#c96a1f; --amber-soft:#faead9; --amber-ink:#2a1503;
+    --amber:#f4b400; --amber-soft:#fdf0cc; --amber-ink:#2a1503;
     --success:#2f8f5b; --success-soft:#e3f3ea;
     --warning:#b5791c; --warning-soft:#faedd6; --warning-ink:#5a3d0f;
     --danger:#b3453a; --danger-soft:#f7e4e1;
@@ -38,7 +38,7 @@
       --ground:#0e151b; --surface:#161f27; --surface-2:#1d2831; --surface-3:#25313b;
       --ink:#e7edef; --ink-soft:#a3b3ba; --ink-faint:#7c8d95; --line:#2b3a44;
       --accent:#72b4de; --accent-strong:#9fd1ee; --accent-soft:#1c3a4a; --accent-ink:#062231;
-      --amber:#f0a257; --amber-soft:#3a2a16; --amber-ink:#2a1503;
+      --amber:#ffd54f; --amber-soft:#3a2a06; --amber-ink:#2a1503;
       --success:#72cd99; --success-soft:#17301f;
       --warning:#f0b95a; --warning-soft:#332708; --warning-ink:#f0b95a;
       --danger:#e6968b; --danger-soft:#3a1f1c;
@@ -51,7 +51,7 @@
     --ground:#0e151b; --surface:#161f27; --surface-2:#1d2831; --surface-3:#25313b;
     --ink:#e7edef; --ink-soft:#a3b3ba; --ink-faint:#7c8d95; --line:#2b3a44;
     --accent:#72b4de; --accent-strong:#9fd1ee; --accent-soft:#1c3a4a; --accent-ink:#062231;
-    --amber:#f0a257; --amber-soft:#3a2a16; --amber-ink:#2a1503;
+    --amber:#ffd54f; --amber-soft:#3a2a06; --amber-ink:#2a1503;
     --success:#72cd99; --success-soft:#17301f;
     --warning:#f0b95a; --warning-soft:#332708; --warning-ink:#f0b95a;
     --danger:#e6968b; --danger-soft:#3a1f1c;
@@ -82,7 +82,7 @@
   /* header */
   .hero{
     position:relative; overflow:hidden; background:var(--accent-strong); color:#eef6fb;
-    padding:22px 18px 0;
+    padding:22px 18px 0; border-top:4px solid var(--amber);
   }
   .hero::before{
     content:""; position:absolute; inset:0;
@@ -92,7 +92,7 @@
     opacity:.5; pointer-events:none;
   }
   .hero-top{position:relative; display:flex; align-items:flex-start; justify-content:space-between; gap:12px;}
-  .eyebrow{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:#bcdcef; margin:0 0 6px;}
+  .eyebrow{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--amber); margin:0 0 6px;}
   .hero h1{font-size:34px; font-weight:800; color:#fff;}
   .hero p.sub{margin:6px 0 0; color:#cfe6f4; font-size:13.5px; max-width:34ch;}
   .who{position:relative; text-align:right; flex-shrink:0;}
