@@ -132,6 +132,12 @@
   .row2{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
   @media (max-width:520px){.row2{grid-template-columns:1fr;}}
 
+  .autocomplete-wrap{position:relative;}
+  .autocomplete-list{position:absolute; z-index:30; top:100%; left:0; right:0; margin-top:5px; background:var(--surface); border:1px solid var(--line); border-radius:9px; box-shadow:var(--shadow); max-height:230px; overflow-y:auto;}
+  .autocomplete-list button{display:block; width:100%; text-align:left; background:none; border:none; border-bottom:1px solid var(--line); padding:11px 12px; font-size:14px; color:var(--ink); cursor:pointer;}
+  .autocomplete-list button:last-child{border-bottom:none;}
+  .autocomplete-list button:hover, .autocomplete-list button:focus{background:var(--surface-2);}
+
   .seg{display:flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; flex-wrap:wrap;}
   .seg button{
     flex:1; background:var(--surface); border:none; padding:10px 8px; cursor:pointer;
@@ -305,6 +311,7 @@
     mergeSourceId: null, mergeQuery: "", mergeTargetCandidateId: null,
     trashConfirmJobId: null,
     syncError: false,
+    isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false,
     notifyEmail: "", notifyEmailMsg: null,
     editingCrewId: null, crewFormError: "",
     glossaryOpen: false,
@@ -562,7 +569,7 @@
           who +
         '</div>' +
         tabs +
-        '<div class="sync-note"><span class="sync-dot" style="'+(state.syncError?'background:#c94b3f;':'')+'"></span>' + (state.syncError ? "Sync trouble — showing last-loaded data" : (dbStatus==="ready" ? "Synced live" : "Connecting…")) + '</div>' +
+        '<div class="sync-note"><span class="sync-dot" style="'+(state.isOffline?'background:#b5791c;':(state.syncError?'background:#c94b3f;':''))+'"></span>' + (state.isOffline ? "Offline — you can keep working, it'll send once you're back in range" : (state.syncError ? "Sync trouble — showing last-loaded data" : (dbStatus==="ready" ? "Synced live" : "Connecting…"))) + '</div>' +
       '</div>'
     );
   }
@@ -701,8 +708,8 @@
     html += '<form id="job-form" data-mode="'+opts.mode+'" '+(job?('data-job-id="'+esc(job.id)+'"'):'')+' '+(isEdit?('data-log-id="'+esc(log.id)+'"'):'')+'>';
 
     if (opts.mode === "new"){
-      html += field("Venue / job site", '<input type="text" name="venue" list="venue-list" placeholder="e.g. 14 Marlow St — pump station" required>' +
-        '<datalist id="venue-list">'+uniqueVenues().map(function(v){return '<option value="'+esc(v)+'">';}).join("")+'</datalist>');
+      html += field("Venue / job site", '<div class="autocomplete-wrap"><input type="text" id="job-venue-input" name="venue" placeholder="e.g. 14 Marlow St — pump station" autocomplete="off" required>' +
+        '<div id="venue-suggestions" class="autocomplete-list" hidden></div></div>');
       html += '<div class="field"><label>Client</label><div class="seg" data-seg="client">' +
         ["ALH","Pubco/Supreme","MRC/Pegasus","Black Rhino","Other","Unsure"].map(function(c){
           return '<button type="button" data-val="'+esc(c)+'">'+esc(c)+'</button>';
@@ -769,10 +776,13 @@
     return html;
   }
 
+  // Every venue that's ever been used, most-recent first, deduplicated. Not
+  // capped here — the autocomplete dropdown that uses this filters by what's
+  // typed and only shows the top few matches, so a long history is fine.
   function uniqueVenues(){
     var seen={}, out=[];
     visibleJobs().forEach(function(j){ if (j.venue && !seen[j.venue]){ seen[j.venue]=1; out.push(j.venue); } });
-    return out.slice(0,25);
+    return out;
   }
 
   function field(label, inputHtml){ return '<div class="field"><label>'+esc(label)+'</label>'+inputHtml+'</div>'; }
@@ -935,6 +945,20 @@
       if (unpriced.length) html += '<button type="button" class="btn btn-outline btn-sm" style="margin:4px 6px 4px 0" data-mgmt="drew">'+unpriced.length+' job'+(unpriced.length===1?"":"s")+' waiting on a price &rarr;</button>';
       if (overdue.length) html += '<button type="button" class="btn btn-outline btn-sm" style="margin:4px 6px 4px 0; color:#b3261e; border-color:#b3261e;" data-mgmt="jobs">'+overdue.length+' follow-up'+(overdue.length===1?"":"s")+' overdue &rarr;</button>';
       if (unassigned.length) html += '<button type="button" class="btn btn-outline btn-sm" style="margin:4px 6px 4px 0" data-mgmt="jobs">'+unassigned.length+' open job'+(unassigned.length===1?"":"s")+' with nobody assigned &rarr;</button>';
+      html += '</div>';
+    }
+
+    // Who's away this week (sick, annual, trade school, public holiday, unpaid) —
+    // pulled straight from leave-logs, same week window as the stats above.
+    var leaveThisWeek = state.leaveLogs
+      .filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr); })
+      .slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+    if (leaveThisWeek.length){
+      html += '<div class="card"><div class="section-title" style="font-size:17px">Who\'s away this week</div>';
+      leaveThisWeek.forEach(function(l){
+        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(l.employee)+'</div><div class="email">'+esc(leaveLabel(l.type))+'</div></div>' +
+          '<div class="mono" style="color:var(--ink-soft); font-size:13px;">'+fmtDay(l.date)+'</div></div>';
+      });
       html += '</div>';
     }
 
@@ -1574,6 +1598,29 @@
     openPrintArea(buildJobPrintHTML(j));
   }
 
+  // Downloads everything (jobs, job updates, leave, crew roster) as one JSON
+  // file — a plain backup for your own records, or to hand over. PINs
+  // (the "logins" collection) are deliberately left out.
+  function exportAllData(){
+    var payload = {
+      exportedAt: new Date().toISOString(),
+      exportedBy: (state.session && state.session.name) || "",
+      crew: state.crew,
+      jobs: state.jobs,
+      jobLogs: state.jobLogs,
+      leaveLogs: state.leaveLogs,
+    };
+    try{
+      var blob = new Blob([JSON.stringify(payload, null, 2)], {type: "application/json"});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url; a.download = "hydraciv-crew-backup-" + todayStr() + ".json";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+      toast("Backup downloaded");
+    }catch(e){ toast("Couldn't build that download — try again."); }
+  }
+
   function renderCrewView(){
     var html = '<div class="card">';
     html += '<div class="section-title">Notifications</div>';
@@ -1582,6 +1629,12 @@
     html += '<div style="flex:1; min-width:200px;">' + field("Send job/timesheet emails to", '<input type="email" name="notifyEmail" value="'+esc(getNotifyEmail())+'" required>') + '</div>';
     html += '<button type="submit" class="btn btn-primary btn-sm">Save</button>';
     html += '</form>';
+    html += '</div>';
+
+    html += '<div class="card">';
+    html += '<div class="section-title">Backup</div>';
+    html += '<p class="section-sub">Download every job, job update and leave day, plus the crew roster, as one file — for your own records, or if you ever need to hand this over. PINs aren\'t included.</p>';
+    html += '<button type="button" class="btn btn-outline" data-action="export-data">Download a backup</button>';
     html += '</div>';
 
     html += '<div class="card">';
@@ -1654,6 +1707,9 @@
     var changePinForm = document.getElementById("change-pin-form");
     if (changePinForm) changePinForm.addEventListener("submit", onSubmitChangePin);
 
+    var exportBtn = root.querySelector('[data-action="export-data"]');
+    if (exportBtn) exportBtn.addEventListener("click", exportAllData);
+
     // setup form
     var setupForm = document.getElementById("setup-form");
     if (setupForm) setupForm.addEventListener("submit", onSubmitSetup);
@@ -1685,6 +1741,34 @@
     root.querySelectorAll("[data-edit-leave]").forEach(function(b){ b.addEventListener("click", function(){ state.editLeaveId=b.getAttribute("data-edit-leave"); state.logView="editLeave"; render(); }); });
     var leaveForm = document.getElementById("leave-form");
     if (leaveForm) leaveForm.addEventListener("submit", onSubmitLeaveForm);
+
+    // venue autocomplete — as they type, show venues used before that match,
+    // so they can tap one instead of retyping it for a return visit.
+    var venueInput = document.getElementById("job-venue-input");
+    var venueSuggestions = document.getElementById("venue-suggestions");
+    if (venueInput && venueSuggestions){
+      var knownVenues = uniqueVenues();
+      var showVenueMatches = function(){
+        var q = venueInput.value.trim().toLowerCase();
+        if (!q){ venueSuggestions.hidden = true; venueSuggestions.innerHTML = ""; return; }
+        var matches = knownVenues.filter(function(v){ return v.toLowerCase().indexOf(q) !== -1; }).slice(0,8);
+        if (!matches.length){ venueSuggestions.hidden = true; venueSuggestions.innerHTML = ""; return; }
+        venueSuggestions.innerHTML = matches.map(function(v){ return '<button type="button">'+esc(v)+'</button>'; }).join("");
+        venueSuggestions.hidden = false;
+      };
+      venueInput.addEventListener("input", showVenueMatches);
+      venueInput.addEventListener("focus", showVenueMatches);
+      // mousedown (not click) fires before the input's blur, so selecting a
+      // suggestion doesn't get raced/cancelled by the list disappearing first.
+      venueSuggestions.addEventListener("mousedown", function(e){
+        var btn = e.target.closest("button");
+        if (!btn) return;
+        e.preventDefault();
+        venueInput.value = btn.textContent;
+        venueSuggestions.hidden = true; venueSuggestions.innerHTML = "";
+      });
+      venueInput.addEventListener("blur", function(){ setTimeout(function(){ venueSuggestions.hidden = true; }, 120); });
+    }
 
     // job details edit (venue/description/type/PO)
     root.querySelectorAll('[data-action="edit-job-details"]').forEach(function(b){ b.addEventListener("click", function(){ state.editingJobId=b.getAttribute("data-job-id"); render(); }); });
@@ -2125,10 +2209,22 @@
 
   render();
 
+  // Lets a crew member keep filling in job sheets with no signal on site —
+  // Firestore queues writes locally (IndexedDB) and sends them automatically
+  // once back in range, even if the tab was closed and reopened in between.
+  // If this fails (older browser, private-browsing mode, etc.) the app just
+  // carries on without offline support, same as before.
+  window.addEventListener("online", function(){ state.isOffline = false; render(); });
+  window.addEventListener("offline", function(){ state.isOffline = true; render(); });
+
   (function(){
     try{
       firebase.initializeApp(firebaseConfig);
     }catch(e){ dbStatus = "unavailable"; render(); return; }
+
+    try{
+      firebase.firestore().enablePersistence({synchronizeTabs: true}).catch(function(){ /* unsupported browser or already open elsewhere — fine, just no offline cache */ });
+    }catch(e){}
 
     firebase.auth().signInAnonymously().then(function(){
       db = firebase.firestore();
