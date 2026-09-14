@@ -628,12 +628,17 @@
       html += renderLeaveForm({mode:"new"});
       return html + renderRecentForMe(me);
     }
+    if (state.logView === "timesheet"){
+      html += renderMyTimesheet(me);
+      return html;
+    }
 
     html += '<div class="card">';
     html += '<div class="section-title">Your jobs</div>';
     html += '<p class="section-sub">Not finished yet? Add an update instead of starting a new one. Taking sick, annual, or trade-school leave? Use the leave button instead — it\'s not a job.</p>';
     html += '<button class="btn btn-primary btn-block" style="margin-bottom:8px" data-action="new-job">Start a new job</button>';
-    html += '<button class="btn btn-outline btn-block" style="margin-bottom:14px" data-action="new-leave">Add a leave day</button>';
+    html += '<button class="btn btn-outline btn-block" style="margin-bottom:8px" data-action="new-leave">Add a leave day</button>';
+    html += '<button class="btn btn-outline btn-block" style="margin-bottom:14px" data-action="view-timesheet">View your timesheet</button>';
 
     var mine = myJobs(me);
     var notFinished = mine.filter(function(j){ return j.open !== false; });
@@ -1375,6 +1380,40 @@
     return html;
   }
 
+  // Crew-facing: the same weekly timesheet block as Management's Timesheets
+  // tab, but for one person only — the crew member's own name, no one else's.
+  function renderMyTimesheet(me){
+    var wk = weekBounds(state.tsWeekOffset);
+    var logs = weeklyEntriesFor(me, wk).sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+    var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
+
+    var html = '<div class="card">';
+    html += '<button type="button" class="btn btn-ghost" data-action="back-to-list" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    html += '<div class="section-title">Your timesheet</div>';
+    html += '<div class="weeknav" style="margin-top:12px"><button data-ts-week="-1">&larr;</button><div class="label">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div><button data-ts-week="1">&rarr;</button></div>';
+    html += '</div>';
+
+    html += '<div class="card">';
+    html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">' +
+      '<p class="section-sub" style="margin-bottom:0">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+' &middot; <span class="mono">'+total.toFixed(1)+'h</span></p>' +
+      '<button type="button" class="btn btn-outline btn-sm" data-copy-ts="'+esc(me)+'">Copy timesheet</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-print-ts="'+esc(me)+'">Print</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-email-ts="'+esc(me)+'">Email</button>' +
+    '</div>';
+    if (logs.length === 0){
+      html += '<p class="empty-note" style="margin-top:12px">Nothing logged this week.</p>';
+    } else {
+      html += '<div class="timeline" style="margin-top:12px">' + logs.map(function(l){
+        var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
+        return '<div class="timeline-item"><strong>'+fmtDay(l.date)+'</strong> &middot; '+esc(l.venue||"")+' &middot; <span class="mono">'+hrs+'h</span>' +
+          (l.isLeave ? ' &middot; <span class="pill pill-accent" style="padding:2px 7px">Leave</span>' : (!l.completed ? ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>' : '')) +
+        '</div>';
+      }).join("") + '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
   function renderTimesheets(){
     var wk = weekBounds(state.tsWeekOffset);
     var names = weekEmployeeNames(wk);
@@ -1639,6 +1678,8 @@
 
     var newLeaveBtn = root.querySelector('[data-action="new-leave"]');
     if (newLeaveBtn) newLeaveBtn.addEventListener("click", function(){ state.logView="leave"; render(); });
+    var viewTimesheetBtn = root.querySelector('[data-action="view-timesheet"]');
+    if (viewTimesheetBtn) viewTimesheetBtn.addEventListener("click", function(){ state.logView="timesheet"; render(); });
     root.querySelectorAll("[data-edit-leave]").forEach(function(b){ b.addEventListener("click", function(){ state.editLeaveId=b.getAttribute("data-edit-leave"); state.logView="editLeave"; render(); }); });
     var leaveForm = document.getElementById("leave-form");
     if (leaveForm) leaveForm.addEventListener("submit", onSubmitLeaveForm);
