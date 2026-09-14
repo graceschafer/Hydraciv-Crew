@@ -216,7 +216,7 @@
   .crew-row .info .name{font-weight:600;}
   .crew-row .info .email{font-size:12px; color:var(--ink-soft);}
 
-  .job-card{border:1px solid var(--line); border-radius:10px; padding:14px 15px;}
+  .job-card{border:1px solid var(--line); border-radius:10px; padding:14px 15px; background:var(--surface-3);}
   .job-card + .job-card{margin-top:10px;}
   .job-card-tap{cursor:pointer;}
   .job-card-tap:hover{border-color:var(--accent);}
@@ -295,6 +295,7 @@
     venueQuery: "",
     crewJobsTab: "open",
     viewingJobId: null,
+    mergeSourceId: null, mergeQuery: "", mergeTargetCandidateId: null,
   };
 
   function esc(s){
@@ -445,7 +446,12 @@
   function isAdmin(){ return !!(state.session && state.session.role === "admin"); }
   function loginFor(crewId){ return state.logins.filter(function(l){ return l.id === crewId; })[0] || null; }
   function jobLogsFor(jobId){ return state.jobLogs.filter(function(l){ return l.jobId === jobId; }); }
-  function openJobs(){ return state.jobs.filter(function(j){ return j.open !== false; }); }
+  // Jobs that haven't been merged away into another job. Every job-listing
+  // view in management should build from this, not state.jobs directly —
+  // a merged job's own doc sticks around (Firestore rules forbid deleting
+  // it) but should never show up as if it were still a live, separate job.
+  function visibleJobs(){ return state.jobs.filter(function(j){ return !j.mergedInto; }); }
+  function openJobs(){ return visibleJobs().filter(function(j){ return j.open !== false; }); }
 
   // ---------- render ----------
   function render(){
@@ -464,6 +470,8 @@
       html += renderChangePinView();
     } else if (state.editLogId){
       html += renderEditLogView();
+    } else if (state.mergeSourceId){
+      html += renderMergePicker();
     } else if (state.viewingJobId){
       html += renderJobDetailView();
     } else if (!isAdmin()){
@@ -731,14 +739,15 @@
   // ---------- MANAGEMENT ----------
   function renderManagementTab(){
     var html = '<div class="subtabs">';
-    [["overview","Overview"],["jobs","Jobs"],["bycrew","By Crew"],["pricing","Pricing"],["timesheets","Timesheets"],["crew","Crew"]].forEach(function(t){
+    [["overview","Overview"],["jobs","Jobs"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["timesheets","Timesheets"],["crew","Crew"]].forEach(function(t){
       html += '<button data-mgmt="'+t[0]+'" class="'+(state.mgmtSub===t[0]?"on":"")+'">'+t[1]+'</button>';
     });
     html += '</div>';
     if (state.mgmtSub === "overview") html += renderOverview();
     else if (state.mgmtSub === "jobs") html += renderJobsAdmin();
     else if (state.mgmtSub === "bycrew") html += renderByCrew();
-    else if (state.mgmtSub === "pricing") html += renderPricing();
+    else if (state.mgmtSub === "drew") html += renderForDrew();
+    else if (state.mgmtSub === "priced") html += renderPricedJobs();
     else if (state.mgmtSub === "timesheets") html += renderTimesheets();
     else html += renderCrewView();
     return html;
@@ -830,6 +839,13 @@
     if (!j){
       return '<div class="card">'+backBtn+'<p class="empty-note">That job isn\'t there anymore.</p></div>';
     }
+    if (j.mergedInto){
+      var target = state.jobs.filter(function(x){ return x.id === j.mergedInto; })[0];
+      return '<div class="card">'+backBtn+
+        '<p class="empty-note">This job was merged into '+(target?esc(target.venue):"another job")+'.</p>' +
+        (target ? '<button type="button" class="btn btn-outline" data-view-job="'+esc(target.id)+'">Go to '+esc(target.venue)+'</button>' : '') +
+      '</div>';
+    }
     var admin = isAdmin() && state.activeTab === "management";
     var employeeView = !admin;
 
@@ -877,6 +893,7 @@
     html += '<button type="button" class="btn btn-ghost btn-sm" data-email-job="'+esc(j.id)+'">Email</button>';
     if (admin){
       html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-merge" data-job-id="'+esc(j.id)+'">Merge into another job&hellip;</button>';
     }
     html += '</div>';
 
@@ -913,6 +930,86 @@
     return html;
   }
 
+  // ---------- Merge two jobs into one (e.g. two people logged the same job separately) ----------
+  function renderMergePicker(){
+    var source = state.jobs.filter(function(x){ return x.id === state.mergeSourceId; })[0];
+    var backBtn = '<button type="button" class="btn btn-ghost" data-action="cancel-merge" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    if (!source){ state.mergeSourceId = null; return renderJobDetailView(); }
+
+    var html = '<div class="card">';
+    html += backBtn;
+    html += '<div class="section-title">Merge &ldquo;'+esc(source.venue)+'&rdquo; into another job</div>';
+    html += '<p class="section-sub">Pick the job to keep everything under. All of &ldquo;'+esc(source.venue)+'&rdquo;\'s logged visits move onto it, and this one closes out. This can\'t be undone.</p>';
+
+    if (state.mergeTargetCandidateId){
+      var target = state.jobs.filter(function(x){ return x.id === state.mergeTargetCandidateId; })[0];
+      if (target){
+        html += '<div class="msg msg-info" style="margin-top:12px">Merge &ldquo;'+esc(source.venue)+'&rdquo; into &ldquo;'+esc(target.venue)+'&rdquo;? Its visit history moves onto &ldquo;'+esc(target.venue)+'&rdquo; and this job closes out — this can\'t be undone.</div>';
+        html += '<div style="display:flex; gap:10px; margin-top:12px;">';
+        html += '<button type="button" class="btn btn-primary" data-action="confirm-merge">Yes, merge it</button>';
+        html += '<button type="button" class="btn btn-ghost" data-action="cancel-merge-target">Choose a different job</button>';
+        html += '</div>';
+        html += '</div>';
+        return html;
+      }
+    }
+
+    html += field("Search by venue", '<input type="text" id="merge-search-input" placeholder="e.g. Deer Park" value="'+esc(state.mergeQuery)+'" autocomplete="off">');
+    html += '</div>';
+
+    var q = (state.mergeQuery||"").trim().toLowerCase();
+    var candidates = visibleJobs().filter(function(j){ return j.id !== source.id; });
+    if (q) candidates = candidates.filter(function(j){ return (j.venue||"").toLowerCase().indexOf(q) !== -1; });
+    candidates.sort(function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); });
+    candidates = candidates.slice(0,25);
+
+    html += '<div class="card">';
+    if (candidates.length === 0){
+      html += '<p class="empty-note">'+(q?"No jobs match.":"Type a venue above to find the job to merge into.")+'</p>';
+    } else {
+      candidates.forEach(function(j){
+        html += '<div class="job-card">';
+        html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
+        if (j.jobDescription) html += '<div class="hint" style="margin-top:2px">'+esc(j.jobDescription)+'</div>';
+        html += '</div><span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span></div>';
+        html += '<button type="button" class="btn btn-outline btn-sm" style="margin-top:10px" data-pick-merge-target="'+esc(j.id)+'">Merge &ldquo;'+esc(source.venue)+'&rdquo; into this job</button>';
+        html += '</div>';
+      });
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function performMerge(sourceId, targetId){
+    if (!db || !sourceId || !targetId || sourceId === targetId) return;
+    var source = state.jobs.filter(function(x){ return x.id===sourceId; })[0];
+    var target = state.jobs.filter(function(x){ return x.id===targetId; })[0];
+    if (!source || !target) return;
+
+    var batch = db.batch();
+    var logs = state.jobLogs.filter(function(l){ return l.jobId === sourceId; });
+    logs.forEach(function(l){
+      batch.update(db.collection("job-logs").doc(l.id), { jobId: targetId, venue: target.venue });
+    });
+
+    var targetPatch = { lastUpdatedAt: new Date().toISOString() };
+    var extraNames = (source.assignedEmployees||[]).filter(function(n){
+      return (target.assignedEmployees||[]).indexOf(n) === -1;
+    });
+    if (extraNames.length){
+      targetPatch.assignedEmployees = firebase.firestore.FieldValue.arrayUnion.apply(null, extraNames);
+    }
+    batch.update(db.collection("jobs").doc(targetId), targetPatch);
+    batch.update(db.collection("jobs").doc(sourceId), { mergedInto: targetId, open: false, lastUpdatedAt: new Date().toISOString() });
+
+    batch.commit().then(function(){
+      toast("Merged into " + target.venue);
+      state.mergeSourceId = null; state.mergeQuery = ""; state.mergeTargetCandidateId = null;
+      state.viewingJobId = targetId;
+      render();
+    }).catch(function(){ toast("Couldn't merge those jobs — try again."); });
+  }
+
   function renderJobsAdmin(){
     var filters = ["all","open","closed","invoiced"];
     var q = (state.venueQuery || "").trim().toLowerCase();
@@ -936,10 +1033,10 @@
       }
       // Searching looks across every job ever logged, regardless of status —
       // the All/Open/Closed/Invoiced filter only applies when not searching.
-      list = state.jobs.filter(jobMatches);
+      list = visibleJobs().filter(jobMatches);
       html += '<p class="hint" style="margin:8px 0 0">Searching everything, across all statuses.</p>';
     } else {
-      list = state.jobs.slice();
+      list = visibleJobs();
       if (state.jobsStatusFilter === "open") list = list.filter(function(j){return j.open!==false && j.status!=="invoiced";});
       if (state.jobsStatusFilter === "closed") list = list.filter(function(j){return j.open===false && j.status!=="invoiced";});
       if (state.jobsStatusFilter === "invoiced") list = list.filter(function(j){return j.status==="invoiced";});
@@ -968,7 +1065,7 @@
 
     if (!sel){ html += '<div class="card"><p class="empty-note">Add crew first.</p></div>'; return html; }
 
-    var mine = state.jobs.filter(function(j){ return (j.assignedEmployees||[]).indexOf(sel) !== -1; });
+    var mine = visibleJobs().filter(function(j){ return (j.assignedEmployees||[]).indexOf(sel) !== -1; });
     var rank = function(j){ return j.status==="invoiced" ? 2 : (j.status==="completed" ? 1 : 0); };
     mine.sort(function(a,b){
       var r = rank(a) - rank(b);
@@ -984,21 +1081,28 @@
     return html;
   }
 
-  // ---------- Pricing: jobs sent to Drew, and jobs he's already priced ----------
-  function renderPricing(){
-    var awaiting = state.jobs.filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
-    var priced = state.jobs.filter(function(j){ return j.invoiceAmount != null && j.invoiceAmount !== "" && j.status !== "invoiced"; });
+  // ---------- For Drew: jobs sent through for pricing ----------
+  function renderForDrew(){
+    var awaiting = visibleJobs().filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
     var byRecent = function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); };
     awaiting.sort(byRecent);
-    priced.sort(byRecent);
 
     var html = '<div class="card">';
-    html += '<div class="section-title">Awaiting price</div><p class="section-sub">Jobs sent through for Drew (or anyone in management) to price.</p>';
+    html += '<div class="section-title">For Drew to price</div><p class="section-sub">Jobs sent through for Drew (or anyone in management) to price.</p>';
     if (awaiting.length===0){ html += '<p class="empty-note">Nothing waiting on a price right now.</p>'; }
     html += '</div>';
     awaiting.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
+    return html;
+  }
 
-    html += '<div class="card" style="margin-top:20px"><div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Jobs tab.</p>';
+  // ---------- Priced: has a price, not yet marked Invoiced ----------
+  function renderPricedJobs(){
+    var priced = visibleJobs().filter(function(j){ return j.invoiceAmount != null && j.invoiceAmount !== "" && j.status !== "invoiced"; });
+    var byRecent = function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); };
+    priced.sort(byRecent);
+
+    var html = '<div class="card">';
+    html += '<div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Jobs tab.</p>';
     if (priced.length===0){ html += '<p class="empty-note">Nothing priced and waiting right now.</p>'; }
     html += '</div>';
     priced.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
@@ -1309,6 +1413,41 @@
     }
 
     root.querySelectorAll("[data-crew-jobs-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.crewJobsTab=b.getAttribute("data-crew-jobs-tab"); render(); }); });
+
+    var startMergeBtn = root.querySelector('[data-action="start-merge"]');
+    if (startMergeBtn) startMergeBtn.addEventListener("click", function(){
+      state.mergeSourceId = startMergeBtn.getAttribute("data-job-id");
+      state.mergeQuery = ""; state.mergeTargetCandidateId = null;
+      render();
+    });
+    var cancelMergeBtn = root.querySelector('[data-action="cancel-merge"]');
+    if (cancelMergeBtn) cancelMergeBtn.addEventListener("click", function(){
+      state.mergeSourceId = null; state.mergeQuery = ""; state.mergeTargetCandidateId = null;
+      render();
+    });
+    var cancelMergeTargetBtn = root.querySelector('[data-action="cancel-merge-target"]');
+    if (cancelMergeTargetBtn) cancelMergeTargetBtn.addEventListener("click", function(){
+      state.mergeTargetCandidateId = null;
+      render();
+    });
+    var confirmMergeBtn = root.querySelector('[data-action="confirm-merge"]');
+    if (confirmMergeBtn) confirmMergeBtn.addEventListener("click", function(){
+      performMerge(state.mergeSourceId, state.mergeTargetCandidateId);
+    });
+    root.querySelectorAll("[data-pick-merge-target]").forEach(function(b){ b.addEventListener("click", function(){
+      state.mergeTargetCandidateId = b.getAttribute("data-pick-merge-target");
+      render();
+    }); });
+    var mergeSearchInput = document.getElementById("merge-search-input");
+    if (mergeSearchInput){
+      mergeSearchInput.addEventListener("input", function(){
+        var pos = mergeSearchInput.selectionStart;
+        state.mergeQuery = mergeSearchInput.value;
+        render();
+        var el = document.getElementById("merge-search-input");
+        if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
+      });
+    }
   }
 
   function onSubmitSetup(e){
