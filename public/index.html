@@ -296,6 +296,7 @@
     crewJobsTab: "open",
     viewingJobId: null,
     mergeSourceId: null, mergeQuery: "", mergeTargetCandidateId: null,
+    trashConfirmJobId: null,
   };
 
   function esc(s){
@@ -446,11 +447,11 @@
   function isAdmin(){ return !!(state.session && state.session.role === "admin"); }
   function loginFor(crewId){ return state.logins.filter(function(l){ return l.id === crewId; })[0] || null; }
   function jobLogsFor(jobId){ return state.jobLogs.filter(function(l){ return l.jobId === jobId; }); }
-  // Jobs that haven't been merged away into another job. Every job-listing
-  // view in management should build from this, not state.jobs directly —
-  // a merged job's own doc sticks around (Firestore rules forbid deleting
-  // it) but should never show up as if it were still a live, separate job.
-  function visibleJobs(){ return state.jobs.filter(function(j){ return !j.mergedInto; }); }
+  // Jobs that haven't been merged away or trashed. Every job-listing view
+  // (management and crew) should build from this, not state.jobs directly —
+  // a merged or trashed job's own doc sticks around (Firestore rules forbid
+  // deleting it) but should never show up as if it were still a live job.
+  function visibleJobs(){ return state.jobs.filter(function(j){ return !j.mergedInto && !j.trashed; }); }
   function openJobs(){ return visibleJobs().filter(function(j){ return j.open !== false; }); }
 
   // ---------- render ----------
@@ -608,7 +609,7 @@
       if (seenJobs[key]) return;
       seenJobs[key] = true;
       var job = state.jobs.filter(function(j){ return j.id === key; })[0];
-      if (job) mine.push(job);
+      if (job && !job.trashed && !job.mergedInto) mine.push(job);
     });
     mine.sort(function(a,b){
       var aOpen = a.open !== false, bOpen = b.open !== false;
@@ -695,7 +696,7 @@
 
   function uniqueVenues(){
     var seen={}, out=[];
-    state.jobs.forEach(function(j){ if (j.venue && !seen[j.venue]){ seen[j.venue]=1; out.push(j.venue); } });
+    visibleJobs().forEach(function(j){ if (j.venue && !seen[j.venue]){ seen[j.venue]=1; out.push(j.venue); } });
     return out.slice(0,25);
   }
 
@@ -710,6 +711,8 @@
       var key = l.jobId || l.id;
       if (seenJobs[key]) return;
       seenJobs[key] = true;
+      var job = state.jobs.filter(function(j){ return j.id === l.jobId; })[0];
+      if (job && (job.trashed || job.mergedInto)) return;
       mine.push(l);
     });
     mine = mine.slice(0,8);
@@ -739,7 +742,7 @@
   // ---------- MANAGEMENT ----------
   function renderManagementTab(){
     var html = '<div class="subtabs">';
-    [["overview","Overview"],["jobs","Jobs"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["timesheets","Timesheets"],["crew","Crew"]].forEach(function(t){
+    [["overview","Overview"],["jobs","Jobs"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["timesheets","Timesheets"],["crew","Crew"],["trash","Trash"]].forEach(function(t){
       html += '<button data-mgmt="'+t[0]+'" class="'+(state.mgmtSub===t[0]?"on":"")+'">'+t[1]+'</button>';
     });
     html += '</div>';
@@ -749,6 +752,7 @@
     else if (state.mgmtSub === "drew") html += renderForDrew();
     else if (state.mgmtSub === "priced") html += renderPricedJobs();
     else if (state.mgmtSub === "timesheets") html += renderTimesheets();
+    else if (state.mgmtSub === "trash") html += renderTrash();
     else html += renderCrewView();
     return html;
   }
@@ -839,6 +843,7 @@
     if (!j){
       return '<div class="card">'+backBtn+'<p class="empty-note">That job isn\'t there anymore.</p></div>';
     }
+    var admin = isAdmin() && state.activeTab === "management";
     if (j.mergedInto){
       var target = state.jobs.filter(function(x){ return x.id === j.mergedInto; })[0];
       return '<div class="card">'+backBtn+
@@ -846,7 +851,12 @@
         (target ? '<button type="button" class="btn btn-outline" data-view-job="'+esc(target.id)+'">Go to '+esc(target.venue)+'</button>' : '') +
       '</div>';
     }
-    var admin = isAdmin() && state.activeTab === "management";
+    if (j.trashed){
+      return '<div class="card">'+backBtn+
+        '<p class="empty-note">&ldquo;'+esc(j.venue)+'&rdquo; is in the trash.</p>' +
+        (admin ? '<button type="button" class="btn btn-outline" data-restore-job="'+esc(j.id)+'">Restore this job</button>' : '') +
+      '</div>';
+    }
     var employeeView = !admin;
 
     if (state.editingJobId === j.id){
@@ -894,8 +904,17 @@
     if (admin){
       html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
       html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-merge" data-job-id="'+esc(j.id)+'">Merge into another job&hellip;</button>';
+      html += '<button type="button" class="btn btn-outline btn-sm" style="color:#b3261e; border-color:#b3261e;" data-action="ask-trash-job" data-job-id="'+esc(j.id)+'">Move to trash&hellip;</button>';
     }
     html += '</div>';
+
+    if (admin && state.trashConfirmJobId === j.id){
+      html += '<div class="msg msg-error" style="margin-top:10px">Move &ldquo;'+esc(j.venue)+'&rdquo; to the trash? It\'ll disappear from every list, but you can restore it later from the Trash tab.</div>';
+      html += '<div style="display:flex; gap:10px; margin-top:10px;">' +
+        '<button type="button" class="btn btn-primary" style="background:#b3261e; border-color:#b3261e;" data-action="confirm-trash-job" data-job-id="'+esc(j.id)+'">Yes, move to trash</button>' +
+        '<button type="button" class="btn btn-ghost" data-action="cancel-trash-job">Cancel</button>' +
+      '</div>';
+    }
 
     html += '<div class="section-title" style="font-size:16px; margin-top:18px; padding-top:14px; border-top:1px solid var(--line);">Visit history</div>';
     if (logs.length){
@@ -1010,6 +1029,39 @@
     }).catch(function(){ toast("Couldn't merge those jobs — try again."); });
   }
 
+  // Permanently deletes a job and every logged visit under it. Firestore's
+  // rules only allow this once "allow delete" is turned on for jobs and
+  // job-logs (see firestore.rules) — see SETUP-EMAIL.md-style note in the
+  // repo, or just the message Grace was given, for how to publish that.
+  // Firestore's rules don't allow real deletes on jobs (on purpose — see
+  // firestore.rules), so "delete" here is a soft trash: the job stays in
+  // the database but drops out of every list (visibleJobs() excludes it),
+  // and it can be restored from the Trash tab. Nothing about its logged
+  // visits changes — they still belong to it, they just aren't shown
+  // anywhere until it's restored.
+  function trashJob(jobId){
+    if (!db || !jobId) return;
+    var j = state.jobs.filter(function(x){ return x.id===jobId; })[0];
+    if (!j) return;
+    db.collection("jobs").doc(jobId).update({ trashed: true, trashedAt: new Date().toISOString() })
+      .then(function(){
+        toast("Moved " + (j.venue||"that job") + " to trash");
+        state.trashConfirmJobId = null;
+        state.viewingJobId = null;
+        state.editingJobId = null;
+        render();
+      }).catch(function(){ toast("Couldn't move that to trash — try again."); });
+  }
+
+  function restoreJob(jobId){
+    if (!db || !jobId) return;
+    var j = state.jobs.filter(function(x){ return x.id===jobId; })[0];
+    if (!j) return;
+    db.collection("jobs").doc(jobId).update({ trashed: false })
+      .then(function(){ toast("Restored " + (j.venue||"that job")); render(); })
+      .catch(function(){ toast("Couldn't restore that — try again."); });
+  }
+
   function renderJobsAdmin(){
     var filters = ["all","open","closed","invoiced"];
     var q = (state.venueQuery || "").trim().toLowerCase();
@@ -1106,6 +1158,27 @@
     if (priced.length===0){ html += '<p class="empty-note">Nothing priced and waiting right now.</p>'; }
     html += '</div>';
     priced.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
+    return html;
+  }
+
+  // ---------- Trash: jobs moved out of the way, restorable any time ----------
+  function renderTrash(){
+    var trashed = state.jobs.filter(function(j){ return j.trashed; });
+    trashed.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
+
+    var html = '<div class="card">';
+    html += '<div class="section-title">Trash</div><p class="section-sub">Jobs moved here are hidden everywhere else but never deleted for good — restore any of them any time.</p>';
+    if (trashed.length===0){ html += '<p class="empty-note">Nothing in the trash.</p>'; }
+    html += '</div>';
+
+    trashed.forEach(function(j){
+      html += '<div class="job-card">';
+      html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
+      if (j.jobDescription) html += '<div class="hint" style="margin-top:2px">'+esc(j.jobDescription)+'</div>';
+      html += '</div><span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span></div>';
+      html += '<button type="button" class="btn btn-outline btn-sm" style="margin-top:10px" data-restore-job="'+esc(j.id)+'">Restore</button>';
+      html += '</div>';
+    });
     return html;
   }
 
@@ -1448,6 +1521,24 @@
         if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
       });
     }
+
+    var askTrashBtn = root.querySelector('[data-action="ask-trash-job"]');
+    if (askTrashBtn) askTrashBtn.addEventListener("click", function(){
+      state.trashConfirmJobId = askTrashBtn.getAttribute("data-job-id");
+      render();
+    });
+    var cancelTrashBtn = root.querySelector('[data-action="cancel-trash-job"]');
+    if (cancelTrashBtn) cancelTrashBtn.addEventListener("click", function(){
+      state.trashConfirmJobId = null;
+      render();
+    });
+    var confirmTrashBtn = root.querySelector('[data-action="confirm-trash-job"]');
+    if (confirmTrashBtn) confirmTrashBtn.addEventListener("click", function(){
+      trashJob(confirmTrashBtn.getAttribute("data-job-id"));
+    });
+    root.querySelectorAll("[data-restore-job]").forEach(function(b){ b.addEventListener("click", function(){
+      restoreJob(b.getAttribute("data-restore-job"));
+    }); });
   }
 
   function onSubmitSetup(e){
