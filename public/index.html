@@ -297,6 +297,10 @@
     viewingJobId: null,
     mergeSourceId: null, mergeQuery: "", mergeTargetCandidateId: null,
     trashConfirmJobId: null,
+    syncError: false,
+    notifyEmail: "", notifyEmailMsg: null,
+    editingCrewId: null, crewFormError: "",
+    glossaryOpen: false,
   };
 
   function esc(s){
@@ -334,7 +338,12 @@
   var EMAILJS_PUBLIC_KEY  = "2w3Xg83Y0sdVsT6WF";
   var EMAILJS_SERVICE_ID  = "service_rt02lxn";
   var EMAILJS_TEMPLATE_ID = "template_nglizx8";
-  var EMAILJS_OFFICE_EMAIL = "graceschafer3@gmail.com";
+  // Fallback only — used until "settings/app".notifyEmail loads (or if it's
+  // never set). Whoever is actually managing the app can change where these
+  // emails go from the Crew tab, without needing a code change — see
+  // getNotifyEmail() / the "Notifications" card in renderCrewView().
+  var DEFAULT_NOTIFY_EMAIL = "graceschafer3@gmail.com";
+  function getNotifyEmail(){ return (state.notifyEmail || DEFAULT_NOTIFY_EMAIL); }
   var emailjsReady = false;
   try{
     if (window.emailjs && EMAILJS_PUBLIC_KEY.indexOf("YOUR_") !== 0){
@@ -383,7 +392,7 @@
       '<p style="margin:6px 0 0;font-size:13px;color:#cfe6f4;">by ' + esc(j.submittedBy) + '</p>';
 
     emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-      to_email: EMAILJS_OFFICE_EMAIL,
+      to_email: getNotifyEmail(),
       cc_email: "",
       subject: subject,
       html_body: brandedEmailShell({header: headerHtml, body: bodyHtml}),
@@ -414,10 +423,10 @@
     var headerHtml = '<h1 style="margin:0;font-size:22px;font-weight:800;color:#fff;">'+esc(j.venue||"")+'</h1>' +
       '<p style="margin:6px 0 0;font-size:13px;color:#cfe6f4;">Status: '+esc(statusLabel(j.status))+'</p>';
     emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-      to_email: EMAILJS_OFFICE_EMAIL, cc_email: "",
+      to_email: getNotifyEmail(), cc_email: "",
       subject: "Job sheet — " + (j.venue||""),
       html_body: brandedEmailShell({header: headerHtml, body: bodyHtml}),
-    }).then(function(){ toast("Emailed to " + EMAILJS_OFFICE_EMAIL); }).catch(function(){ toast("Couldn't send that email — try again."); });
+    }).then(function(){ toast("Emailed to " + getNotifyEmail()); }).catch(function(){ toast("Couldn't send that email — try again."); });
   }
 
   function emailTimesheetFor(name){
@@ -437,7 +446,7 @@
     var headerHtml = '<h1 style="margin:0;font-size:22px;font-weight:800;color:#fff;">'+esc(name)+' &mdash; Timesheet</h1>' +
       '<p style="margin:6px 0 0;font-size:13px;color:#cfe6f4;">'+esc(fmtShort(wk.startStr))+' to '+esc(fmtShort(wk.endStr))+'</p>';
     emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-      to_email: EMAILJS_OFFICE_EMAIL, cc_email: "",
+      to_email: getNotifyEmail(), cc_email: "",
       subject: name + "'s timesheet — " + fmtShort(wk.startStr) + " to " + fmtShort(wk.endStr),
       html_body: brandedEmailShell({header: headerHtml, body: bodyHtml}),
     }).then(function(){ toast("Emailed " + name + "'s timesheet"); }).catch(function(){ toast("Couldn't send that email — try again."); });
@@ -460,7 +469,7 @@
     html += renderHero();
     html += "<main>";
     if (dbStatus === "unavailable"){
-      html += '<div class="card center-card"><div class="msg msg-error">Couldn\'t connect to the Hydraciv Crew database. Check your internet connection and reload the page — if it keeps happening, let Grace know.</div></div>';
+      html += '<div class="card center-card"><div class="msg msg-error">Couldn\'t connect to the Hydraciv Crew database. Check your internet connection and reload the page — if it keeps happening, let whoever manages this app know.</div></div>';
     } else if (dbStatus === "loading"){
       html += '<div class="card center-card"><p class="empty-note">Loading…</p></div>';
     } else if (state.crew.length === 0){
@@ -508,7 +517,7 @@
           who +
         '</div>' +
         tabs +
-        '<div class="sync-note"><span class="sync-dot"></span>' + (dbStatus==="ready" ? "Synced live" : "Connecting…") + '</div>' +
+        '<div class="sync-note"><span class="sync-dot" style="'+(state.syncError?'background:#c94b3f;':'')+'"></span>' + (state.syncError ? "Sync trouble — showing last-loaded data" : (dbStatus==="ready" ? "Synced live" : "Connecting…")) + '</div>' +
       '</div>'
     );
   }
@@ -776,6 +785,19 @@
     html += statTile(activeCrew().length, "Active crew");
     html += '</div></div>';
 
+    // What actually needs a manager's attention right now — the things a
+    // substitute manager should check first, before anything else on this page.
+    var unpriced = visibleJobs().filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
+    var overdue = overdueFollowups();
+    var unassigned = openJobs().filter(function(j){ return !j.assignedEmployees || j.assignedEmployees.length===0; });
+    if (unpriced.length || overdue.length || unassigned.length){
+      html += '<div class="card"><div class="section-title" style="font-size:17px">Needs attention</div>';
+      if (unpriced.length) html += '<button type="button" class="btn btn-outline btn-sm" style="margin:4px 6px 4px 0" data-mgmt="drew">'+unpriced.length+' job'+(unpriced.length===1?"":"s")+' waiting on a price &rarr;</button>';
+      if (overdue.length) html += '<button type="button" class="btn btn-outline btn-sm" style="margin:4px 6px 4px 0; color:#b3261e; border-color:#b3261e;" data-mgmt="jobs">'+overdue.length+' follow-up'+(overdue.length===1?"":"s")+' overdue &rarr;</button>';
+      if (unassigned.length) html += '<button type="button" class="btn btn-outline btn-sm" style="margin:4px 6px 4px 0" data-mgmt="jobs">'+unassigned.length+' open job'+(unassigned.length===1?"":"s")+' with nobody assigned &rarr;</button>';
+      html += '</div>';
+    }
+
     html += '<div class="card"><div class="section-title" style="font-size:17px">Hours by crew member</div>';
     if (empRows.length===0){ html += '<p class="empty-note">No jobs logged this week yet.</p>'; }
     else { empRows.forEach(function(name){ var v=byEmp[name]; html += '<div class="bar-row"><div class="bar-name">'+esc(name)+'</div><div class="bar-track"><div class="bar-fill" style="width:'+(v/maxHrs*100)+'%"></div></div><div class="bar-val mono">'+v.toFixed(1)+'h</div></div>'; }); }
@@ -786,7 +808,41 @@
     if (followups.length===0){ html += '<p class="empty-note">Nothing outstanding.</p>'; }
     else { followups.forEach(function(j){ html += renderJobCard(j, {admin:false}); }); }
     html += '</div>';
+
+    html += renderGlossaryCard();
     return html;
+  }
+
+  // A plain-language reference for the statuses and tabs — mainly so someone
+  // new to managing this app isn't left guessing what "For Drew" or
+  // "Invoiced" means.
+  function renderGlossaryCard(){
+    var html = '<div class="card">';
+    html += '<button type="button" class="btn btn-ghost btn-sm" style="padding-left:0" data-action="toggle-glossary">'+(state.glossaryOpen?"Hide":"What do all the tabs and statuses mean?")+'</button>';
+    if (state.glossaryOpen){
+      html += '<div style="margin-top:8px; font-size:13.5px; line-height:1.6;">' +
+        '<p><strong>Job statuses:</strong> Quoted (priced but not started) &middot; In-process (crew is working it) &middot; Completed (work\'s done, may still need pricing/invoicing) &middot; Invoiced (billed, fully closed out).</p>' +
+        '<p><strong>Jobs</strong> — every job ever logged; filter by status or search across all of them.</p>' +
+        '<p><strong>By Crew</strong> — pick a crew member to see just their jobs.</p>' +
+        '<p><strong>For Drew</strong> — jobs flagged for pricing (the "Send to Drew for pricing" button on a job puts it here). Prices and notes here are never shown to crew.</p>' +
+        '<p><strong>Priced</strong> — has a price set, not yet marked Invoiced.</p>' +
+        '<p><strong>Trash</strong> — jobs someone moved out of the way (test entries, duplicates). Nothing is ever permanently deleted — anything here can be restored.</p>' +
+        '<p><strong>Merge</strong> (button inside a job\'s detail view) — for when the same job got logged twice by different people; folds one into the other, keeping all the history.</p>' +
+      '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  // Open jobs whose most recent update said "not finished" and gave an
+  // estimated return date that's now in the past. state.jobLogs is loaded
+  // newest-first, so the first log found per job is the latest one.
+  function overdueFollowups(){
+    var today = todayStr();
+    return openJobs().filter(function(j){
+      var latest = jobLogsFor(j.id)[0];
+      return !!(latest && !latest.completed && latest.estimatedReturn && latest.estimatedReturn < today);
+    });
   }
 
   function statTile(num,label){ return '<div class="stat-tile"><div class="num mono">'+num+'</div><div class="label">'+esc(label)+'</div></div>'; }
@@ -1344,10 +1400,20 @@
 
   function renderCrewView(){
     var html = '<div class="card">';
-    html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px;"><div><div class="section-title">Crew roster</div><p class="section-sub">Everyone sets a 4-digit PIN on first login. Job and timesheet emails go to the office only — crew aren\'t emailed automatically.</p></div>' +
+    html += '<div class="section-title">Notifications</div>';
+    html += '<p class="section-sub">"Email" buttons on a job or timesheet — and the automatic email sent whenever a job is logged — go to this address. Change it any time, e.g. when someone new takes over managing this app.</p>';
+    html += '<form id="notify-email-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">';
+    html += '<div style="flex:1; min-width:200px;">' + field("Send job/timesheet emails to", '<input type="email" name="notifyEmail" value="'+esc(getNotifyEmail())+'" required>') + '</div>';
+    html += '<button type="submit" class="btn btn-primary btn-sm">Save</button>';
+    html += '</form>';
+    html += '</div>';
+
+    html += '<div class="card">';
+    html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px;"><div><div class="section-title">Crew roster</div><p class="section-sub">Everyone sets a 4-digit PIN on first login. Names have to be unique — that\'s how jobs and timesheets tell people apart.</p></div>' +
       '<button class="btn btn-outline btn-sm" data-action="toggle-crew-form">'+(state.crewFormOpen?"Close":"Add crew")+'</button></div>';
     if (state.crewFormOpen){
       html += '<form id="crew-form" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line)">';
+      if (state.crewFormError) html += '<div class="msg msg-error">'+esc(state.crewFormError)+'</div>';
       html += '<div class="row2">';
       html += field("Name", '<input type="text" name="name" placeholder="Full name" required>');
       html += field("Email", '<input type="email" name="email" placeholder="name@hydraciv.com.au" required>');
@@ -1365,11 +1431,29 @@
     if (state.crew.length===0){ html += '<p class="empty-note">No crew added yet.</p>'; }
     else {
       state.crew.forEach(function(c){
+        if (state.editingCrewId === c.id){
+          html += '<div class="crew-row" style="flex-direction:column; align-items:stretch;">';
+          html += '<form data-crew-id="'+esc(c.id)+'" id="edit-crew-form-'+esc(c.id)+'" class="edit-crew-form">';
+          if (state.crewFormError) html += '<div class="msg msg-error">'+esc(state.crewFormError)+'</div>';
+          html += '<div class="row2">';
+          html += field("Name", '<input type="text" name="name" value="'+esc(c.name)+'" required>');
+          html += field("Email", '<input type="email" name="email" value="'+esc(c.email||"")+'" required>');
+          html += '</div>';
+          html += '<div class="field"><label>Role</label><div class="seg" data-seg="editCrewRole">' +
+            '<button type="button" data-val="employee" class="'+(c.role!=="admin"?"on":"")+'">Employee</button>' +
+            '<button type="button" data-val="admin" class="'+(c.role==="admin"?"on":"")+'">Manager</button>' +
+          '</div></div>';
+          html += '<p class="hint">Renaming won\'t change their name on jobs already logged — only new ones.</p>';
+          html += '<div style="display:flex; gap:8px;"><button type="submit" class="btn btn-primary btn-sm">Save</button><button type="button" class="btn btn-ghost btn-sm" data-action="cancel-edit-crew">Cancel</button></div>';
+          html += '</form></div>';
+          return;
+        }
         var login = loginFor(c.id);
         var pinPill = (login && login.pin) ? '<span class="pill pill-success">PIN set</span>' : '<span class="pill pill-warning">Not set yet</span>';
         html += '<div class="crew-row"><div class="info"><div class="name">'+esc(c.name)+' <span class="pill pill-neutral">'+(c.role==="admin"?"Manager":"Employee")+'</span>'+(c.active===false?' <span class="pill pill-neutral">inactive</span>':'')+'</div>' +
           (c.email?'<div class="email">'+esc(c.email)+'</div>':'') + '<div style="margin-top:4px">'+pinPill+'</div></div>' +
           '<div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">' +
+          '<button class="btn btn-ghost btn-sm" style="padding:2px 4px" data-edit-crew="'+esc(c.id)+'">Edit</button>' +
           '<button class="btn btn-outline btn-sm" data-crew-toggle="'+esc(c.id)+'">'+(c.active===false?"Reactivate":"Deactivate")+'</button>' +
           ((login && login.pin) ? '<button class="btn btn-ghost btn-sm" data-reset-pin="'+esc(c.id)+'" style="padding:2px 4px">Reset PIN</button>' : '') +
           '</div></div>';
@@ -1448,10 +1532,23 @@
     var crewForm = document.getElementById("crew-form");
     if (crewForm) crewForm.addEventListener("submit", onSubmitCrew);
     var crewToggleBtn = root.querySelector('[data-action="toggle-crew-form"]');
-    if (crewToggleBtn) crewToggleBtn.addEventListener("click", function(){ state.crewFormOpen=!state.crewFormOpen; state.crewRole="employee"; render(); });
+    if (crewToggleBtn) crewToggleBtn.addEventListener("click", function(){ state.crewFormOpen=!state.crewFormOpen; state.crewRole="employee"; state.crewFormError=""; render(); });
 
     root.querySelectorAll("[data-crew-toggle]").forEach(function(b){ b.addEventListener("click", function(){ toggleCrewActive(b.getAttribute("data-crew-toggle")); }); });
     root.querySelectorAll("[data-reset-pin]").forEach(function(b){ b.addEventListener("click", function(){ resetPin(b.getAttribute("data-reset-pin")); }); });
+    root.querySelectorAll("[data-edit-crew]").forEach(function(b){ b.addEventListener("click", function(){ state.editingCrewId=b.getAttribute("data-edit-crew"); state.crewFormError=""; render(); }); });
+    var cancelEditCrewBtn = root.querySelector('[data-action="cancel-edit-crew"]');
+    if (cancelEditCrewBtn) cancelEditCrewBtn.addEventListener("click", function(){ state.editingCrewId=null; state.crewFormError=""; render(); });
+    root.querySelectorAll(".edit-crew-form").forEach(function(f){ f.addEventListener("submit", onSubmitEditCrew); });
+
+    var toggleGlossaryBtn = root.querySelector('[data-action="toggle-glossary"]');
+    if (toggleGlossaryBtn) toggleGlossaryBtn.addEventListener("click", function(){ state.glossaryOpen=!state.glossaryOpen; render(); });
+
+    var notifyEmailForm = document.getElementById("notify-email-form");
+    if (notifyEmailForm) notifyEmailForm.addEventListener("submit", function(e){
+      e.preventDefault();
+      saveNotifyEmail(e.target.notifyEmail.value);
+    });
 
     root.querySelectorAll("[data-job-status-select]").forEach(function(sel){
       sel.addEventListener("change", function(){ setJobStatus(sel.getAttribute("data-job-status-select"), sel.value); });
@@ -1586,7 +1683,7 @@
     var crewMember = activeCrew().filter(function(c){ return c.name === state.loginName; })[0];
     var login = crewMember ? loginFor(crewMember.id) : null;
     if (!crewMember || !login || login.pin !== pin){
-      state.loginError="Wrong PIN. Try again, or ask your manager to reset it."; render(); return;
+      state.loginError="Wrong PIN. Try again, or ask a manager to reset it for you from the Crew tab (Management &rarr; Crew &rarr; Reset PIN)."; render(); return;
     }
     state.session = {id:crewMember.id, name:crewMember.name, role:crewMember.role||"employee"};
     saveSession(state.session);
@@ -1736,9 +1833,40 @@
     var name = f.name.value.trim();
     var email = f.email.value.trim();
     if (!name || !email) return;
+    // Names are how jobs/logs actually identify people (there's no separate
+    // ID used for that) — two crew members with the same name would quietly
+    // mix up each other's hours and job history, so this is a hard stop.
+    var clash = state.crew.some(function(c){ return c.name.trim().toLowerCase() === name.toLowerCase(); });
+    if (clash){
+      state.crewFormError = "There's already a crew member named \""+name+"\". Use a last initial to tell them apart, e.g. \""+name+" B\".";
+      render();
+      return;
+    }
+    state.crewFormError = "";
     db.collection("crew").add({name:name, email:email, role:state.crewRole, active:true, createdAt:new Date().toISOString()})
       .then(function(){ state.crewFormOpen=false; toast(name+" added — they'll set their PIN on first login"); render(); })
       .catch(function(){ toast("Couldn't add crew — manager access needed."); });
+  }
+
+  function onSubmitEditCrew(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var id = f.getAttribute("data-crew-id");
+    var name = f.name.value.trim();
+    var email = f.email.value.trim();
+    if (!name || !email) return;
+    var clash = state.crew.some(function(c){ return c.id !== id && c.name.trim().toLowerCase() === name.toLowerCase(); });
+    if (clash){
+      state.crewFormError = "There's already a crew member named \""+name+"\". Use a last initial to tell them apart.";
+      render();
+      return;
+    }
+    state.crewFormError = "";
+    var role = f.querySelector('[data-seg="editCrewRole"] .on') ? f.querySelector('[data-seg="editCrewRole"] .on').getAttribute("data-val") : "employee";
+    db.collection("crew").doc(id).update({name:name, email:email, role:role})
+      .then(function(){ toast("Saved — heads up: jobs already logged under their old name won't update."); state.editingCrewId=null; render(); })
+      .catch(function(){ toast("Couldn't save — manager access needed."); });
   }
 
   function toggleCrewActive(id){
@@ -1753,6 +1881,15 @@
     db.collection("logins").doc(id).delete()
       .then(function(){ toast("PIN cleared — they'll set a new one next login."); })
       .catch(function(){ toast("Couldn't reset PIN."); });
+  }
+
+  function saveNotifyEmail(email){
+    if (!db) return;
+    email = (email||"").trim();
+    if (!email){ toast("Enter an email address first."); return; }
+    db.collection("settings").doc("app").set({notifyEmail: email}, {merge:true})
+      .then(function(){ toast("Job and timesheet emails will now go to " + email); })
+      .catch(function(){ toast("Couldn't save that — try again."); });
   }
 
   function setJobStatus(jobId, status){
@@ -1812,23 +1949,35 @@
       db = firebase.firestore();
       dbStatus = "ready";
 
+      // Any of these failing after the initial connect (e.g. a dropped
+      // network mid-session) used to fail completely silently — now it
+      // flips a small visible "sync trouble" indicator instead of just
+      // quietly going stale.
+      function onListenerError(){ state.syncError = true; render(); }
+
       db.collection("crew").orderBy("createdAt","asc").onSnapshot(function(snap){
         state.crew = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        state.syncError = false;
         render();
-      }, function(){});
+      }, onListenerError);
 
       db.collection("logins").onSnapshot(function(snap){
         state.logins = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         render();
-      }, function(){});
+      }, onListenerError);
 
       db.collection("jobs").orderBy("createdAt","desc").limit(500).onSnapshot(function(snap){
         state.jobs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         render();
-      }, function(){});
+      }, onListenerError);
 
       db.collection("job-logs").orderBy("submittedAt","desc").limit(1000).onSnapshot(function(snap){
         state.jobLogs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, onListenerError);
+
+      db.collection("settings").doc("app").onSnapshot(function(doc){
+        state.notifyEmail = (doc.exists && doc.data().notifyEmail) ? doc.data().notifyEmail : "";
         render();
       }, function(){});
 
