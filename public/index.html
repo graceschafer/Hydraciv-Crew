@@ -1140,6 +1140,36 @@
       '</div>';
     }
 
+    // For a job that's dragged on across multiple visits — days, weeks, even
+    // months — the full visit-by-visit timeline below gets long fast. This
+    // summary sits above it as the "at a glance" version: total hours, how
+    // many visits, the date range, and every visit's materials pulled into
+    // one list, so nobody has to scroll the whole timeline just to add up
+    // hours or see what's been used.
+    if (logs.length > 1){
+      var summaryDates = logs.map(function(l){ return l.date; }).filter(Boolean).slice().sort();
+      var firstVisitDate = summaryDates[0], lastVisitDate = summaryDates[summaryDates.length-1];
+      var summaryHours = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
+      var materialsRows = logs.slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); })
+        .filter(function(l){ return l.materials; });
+
+      html += '<div class="card" style="margin-top:14px; background:var(--surface-2);">';
+      html += '<div class="section-title" style="font-size:16px">Job summary</div>';
+      html += '<p class="section-sub" style="margin-bottom:12px">'+logs.length+' visits logged so far.</p>';
+      html += '<div class="stat-grid">';
+      html += statTile(summaryHours.toFixed(1), "Total hours");
+      html += statTile(logs.length, "Visits logged");
+      html += statTile(fmtShort(firstVisitDate), "First visit");
+      html += (j.open === false) ? statTile(fmtShort(lastVisitDate), "Last visit") : statTile("Ongoing", "Status");
+      html += '</div>';
+      if (materialsRows.length){
+        html += '<div style="margin-top:14px"><div class="hint" style="text-transform:uppercase; letter-spacing:.04em; font-weight:600; margin-bottom:6px;">Materials used, by visit</div>';
+        html += materialsRows.map(function(l){ return '<div class="log-meta" style="margin-bottom:5px"><strong>'+fmtDay(l.date)+':</strong> '+esc(l.materials)+'</div>'; }).join("");
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
     html += '<div class="section-title" style="font-size:16px; margin-top:18px; padding-top:14px; border-top:1px solid var(--line);">Visit history</div>';
     if (logs.length){
       // Group entries by date so two people (or two updates) on the same day
@@ -1157,6 +1187,7 @@
           html += '<div style="margin-top:4px;'+(idx>0?' padding-top:6px; border-top:1px dashed var(--line);':'')+'">' +
             '<span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span>'+(l.timeRange?' <span class="hint">('+esc(l.timeRange)+')</span>':'')+' &middot; '+esc(l.submittedBy||"")+
             (l.completed ? ' &middot; <span class="pill pill-success" style="padding:2px 7px">Completed</span>' : ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>') +
+            (l.jobDescription ? '<br><span class="log-desc" style="margin-top:3px; display:inline-block;">'+esc(l.jobDescription)+'</span>' : '') +
             (l.materials ? '<br><span class="hint">Materials: '+esc(l.materials)+'</span>' : '') +
             (l.alsoOnsite ? '<br><span class="hint">Also onsite: '+esc(l.alsoOnsite)+'</span>' : '') +
             (!l.completed && l.remainingWork ? '<br><span class="hint">Still to do: '+esc(l.remainingWork)+'</span>' : '') +
@@ -1187,7 +1218,9 @@
     if (state.mergeTargetCandidateId){
       var target = state.jobs.filter(function(x){ return x.id === state.mergeTargetCandidateId; })[0];
       if (target){
-        html += '<div class="msg msg-info" style="margin-top:12px">Merge &ldquo;'+esc(source.venue)+'&rdquo; into &ldquo;'+esc(target.venue)+'&rdquo;? Its visit history moves onto &ldquo;'+esc(target.venue)+'&rdquo; and this job closes out — this can\'t be undone.</div>';
+        html += '<div class="msg msg-info" style="margin-top:12px">Merge &ldquo;'+esc(source.venue)+'&rdquo; into &ldquo;'+esc(target.venue)+'&rdquo;? Its visit history moves onto this job and it closes out — this can\'t be undone.</div>';
+        html += '<div style="margin-top:12px">' + field("Name this job (optional)", '<input type="text" id="merge-name-input" value="'+esc(target.venue)+'">') + '</div>';
+        html += '<p class="hint" style="margin-top:-8px">Leave as is to keep the current name, or give the combined job a clearer one — e.g. &ldquo;Deer Park &mdash; Bathroom renovation&rdquo;. This updates every visit already logged, so it all reads the same everywhere (timesheets included).</p>';
         html += '<div style="display:flex; gap:10px; margin-top:12px;">';
         html += '<button type="button" class="btn btn-primary" data-action="confirm-merge">Yes, merge it</button>';
         html += '<button type="button" class="btn btn-ghost" data-action="cancel-merge-target">Choose a different job</button>';
@@ -1223,19 +1256,33 @@
     return html;
   }
 
-  function performMerge(sourceId, targetId){
+  function performMerge(sourceId, targetId, newName){
     if (!db || !sourceId || !targetId || sourceId === targetId) return;
     var source = state.jobs.filter(function(x){ return x.id===sourceId; })[0];
     var target = state.jobs.filter(function(x){ return x.id===targetId; })[0];
     if (!source || !target) return;
 
-    var batch = db.batch();
-    var logs = state.jobLogs.filter(function(l){ return l.jobId === sourceId; });
-    logs.forEach(function(l){
-      batch.update(db.collection("job-logs").doc(l.id), { jobId: targetId, venue: target.venue });
-    });
+    // A merge can also double as "give this job a clearer name" — e.g.
+    // renaming a job that started as just "Deer Park" to "Deer Park —
+    // Bathroom renovation" once it's clearly its own multi-week project.
+    // Every visit already logged (on both sides of the merge) gets its
+    // venue text updated to match, so timesheets and job cards all read
+    // the same name instead of the old one lingering on older entries.
+    var finalVenue = (newName && newName.trim()) ? newName.trim() : target.venue;
 
-    var targetPatch = { lastUpdatedAt: new Date().toISOString() };
+    var batch = db.batch();
+    var sourceLogs = state.jobLogs.filter(function(l){ return l.jobId === sourceId; });
+    sourceLogs.forEach(function(l){
+      batch.update(db.collection("job-logs").doc(l.id), { jobId: targetId, venue: finalVenue });
+    });
+    if (finalVenue !== target.venue){
+      var targetLogs = state.jobLogs.filter(function(l){ return l.jobId === targetId; });
+      targetLogs.forEach(function(l){
+        batch.update(db.collection("job-logs").doc(l.id), { venue: finalVenue });
+      });
+    }
+
+    var targetPatch = { lastUpdatedAt: new Date().toISOString(), venue: finalVenue };
     var extraNames = (source.assignedEmployees||[]).filter(function(n){
       return (target.assignedEmployees||[]).indexOf(n) === -1;
     });
@@ -1246,7 +1293,7 @@
     batch.update(db.collection("jobs").doc(sourceId), { mergedInto: targetId, open: false, lastUpdatedAt: new Date().toISOString() });
 
     batch.commit().then(function(){
-      toast("Merged into " + target.venue);
+      toast("Merged into " + finalVenue);
       state.mergeSourceId = null; state.mergeQuery = ""; state.mergeTargetCandidateId = null;
       state.viewingJobId = targetId;
       render();
@@ -1870,7 +1917,8 @@
     });
     var confirmMergeBtn = root.querySelector('[data-action="confirm-merge"]');
     if (confirmMergeBtn) confirmMergeBtn.addEventListener("click", function(){
-      performMerge(state.mergeSourceId, state.mergeTargetCandidateId);
+      var nameInput = document.getElementById("merge-name-input");
+      performMerge(state.mergeSourceId, state.mergeTargetCandidateId, nameInput ? nameInput.value : "");
     });
     root.querySelectorAll("[data-pick-merge-target]").forEach(function(b){ b.addEventListener("click", function(){
       state.mergeTargetCandidateId = b.getAttribute("data-pick-merge-target");
