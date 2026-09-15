@@ -1128,12 +1128,14 @@
     if (admin){
       html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
       html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-merge" data-job-id="'+esc(j.id)+'">Merge into another job&hellip;</button>';
-      html += '<button type="button" class="btn btn-outline btn-sm" style="color:#b3261e; border-color:#b3261e;" data-action="ask-trash-job" data-job-id="'+esc(j.id)+'">Move to trash&hellip;</button>';
     }
+    // Trash is open to crew too — e.g. an accidental duplicate job — not just
+    // management. Same confirm-before-you-do-it step either way.
+    html += '<button type="button" class="btn btn-outline btn-sm" style="color:#b3261e; border-color:#b3261e;" data-action="ask-trash-job" data-job-id="'+esc(j.id)+'">Move to trash&hellip;</button>';
     html += '</div>';
 
-    if (admin && state.trashConfirmJobId === j.id){
-      html += '<div class="msg msg-error" style="margin-top:10px">Move &ldquo;'+esc(j.venue)+'&rdquo; to the trash? It\'ll disappear from every list, but you can restore it later from the Trash tab.</div>';
+    if (state.trashConfirmJobId === j.id){
+      html += '<div class="msg msg-error" style="margin-top:10px">Move &ldquo;'+esc(j.venue)+'&rdquo; to the trash? It\'ll disappear from every list' + (admin ? ', but you can restore it later from the Trash tab.' : ' — if that\'s a mistake, ask a manager to restore it for you.') + '</div>';
       html += '<div style="display:flex; gap:10px; margin-top:10px;">' +
         '<button type="button" class="btn btn-primary" style="background:#b3261e; border-color:#b3261e;" data-action="confirm-trash-job" data-job-id="'+esc(j.id)+'">Yes, move to trash</button>' +
         '<button type="button" class="btn btn-ghost" data-action="cancel-trash-job">Cancel</button>' +
