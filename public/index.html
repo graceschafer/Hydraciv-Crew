@@ -309,7 +309,7 @@
     crewJobsTab: "open",
     viewingJobId: null,
     mergeSourceId: null, mergeQuery: "", mergeTargetCandidateId: null,
-    trashConfirmJobId: null,
+    trashConfirmJobId: null, trashConfirmLeaveId: null, trashConfirmLogId: null,
     syncError: false,
     isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false,
     notifyEmail: "", notifyEmailMsg: null,
@@ -340,6 +340,14 @@
   function inRange(d,a,b){ return d>=a && d<=b; }
   function numHours(v){ var n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
+  // Crew can only edit/delete a visit they logged while its date is still in
+  // the current work week — keeps timesheets from shifting after the fact
+  // once a week's closed out. Management isn't limited by this.
+  function isInCurrentWeek(dateStr){
+    var wk = weekBounds(0);
+    return inRange(dateStr, wk.startStr, wk.endStr);
+  }
+
   // ---------- Leave (sick / annual / trade school / public holiday / unpaid) — a fixed number
   // of hours per type (0 for unpaid), no job attached ----------
   var LEAVE_TYPES = {
@@ -357,11 +365,11 @@
   // copy can all treat a leave day exactly like a logged job without extra cases.
   function leaveEntriesFor(name, wk){
     return state.leaveLogs
-      .filter(function(l){ return l.employee === name && inRange(l.date, wk.startStr, wk.endStr); })
+      .filter(function(l){ return l.employee === name && !l.trashed && inRange(l.date, wk.startStr, wk.endStr); })
       .map(function(l){ return { id: l.id, date: l.date, hours: leaveHours(l.type), completed: true, venue: leaveLabel(l.type), isLeave: true, leaveType: l.type }; });
   }
   function weeklyEntriesFor(name, wk){
-    var jobEntries = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(name) !== -1; });
+    var jobEntries = state.jobLogs.filter(function(l){ return !l.trashed && inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(name) !== -1; });
     return jobEntries.concat(leaveEntriesFor(name, wk));
   }
   // Everyone who has either a job log or a leave day in the given week —
@@ -369,8 +377,8 @@
   // alone, or someone who was only on leave all week wouldn't show up at all.
   function weekEmployeeNames(wk){
     var names = {};
-    state.jobLogs.forEach(function(l){ if (inRange(l.date, wk.startStr, wk.endStr)) (l.employees||[]).forEach(function(n){ names[n]=1; }); });
-    state.leaveLogs.forEach(function(l){ if (inRange(l.date, wk.startStr, wk.endStr)) names[l.employee]=1; });
+    state.jobLogs.forEach(function(l){ if (!l.trashed && inRange(l.date, wk.startStr, wk.endStr)) (l.employees||[]).forEach(function(n){ names[n]=1; }); });
+    state.leaveLogs.forEach(function(l){ if (!l.trashed && inRange(l.date, wk.startStr, wk.endStr)) names[l.employee]=1; });
     return Object.keys(names).sort();
   }
   function statusLabel(s){ return {quoted:"Quoted","in-process":"In process",completed:"Completed",invoiced:"Invoiced"}[s] || "Quoted"; }
@@ -505,7 +513,7 @@
   function activeCrew(){ return state.crew.filter(function(c){ return c.active !== false; }); }
   function isAdmin(){ return !!(state.session && state.session.role === "admin"); }
   function loginFor(crewId){ return state.logins.filter(function(l){ return l.id === crewId; })[0] || null; }
-  function jobLogsFor(jobId){ return state.jobLogs.filter(function(l){ return l.jobId === jobId; }); }
+  function jobLogsFor(jobId){ return state.jobLogs.filter(function(l){ return l.jobId === jobId && !l.trashed; }); }
   // Jobs that haven't been merged away or trashed. Every job-listing view
   // (management and crew) should build from this, not state.jobs directly —
   // a merged or trashed job's own doc sticks around (Firestore rules forbid
@@ -676,7 +684,7 @@
   function myJobs(me){
     var seenJobs = {}, mine = [];
     state.jobLogs.forEach(function(l){
-      if (!l.employees || l.employees.indexOf(me) === -1) return;
+      if (l.trashed || !l.employees || l.employees.indexOf(me) === -1) return;
       var key = l.jobId || l.id;
       if (seenJobs[key]) return;
       seenJobs[key] = true;
@@ -748,6 +756,13 @@
   function renderEditLogView(){
     var log = state.jobLogs.filter(function(l){ return l.id === state.editLogId; })[0];
     if (!log){ return '<div class="card"><p class="empty-note">That entry isn\'t there anymore.</p><button type="button" class="btn btn-outline" data-action="back-to-list">&larr; Back</button></div>'; }
+    // Crew can only edit a visit while its date is still in the current work
+    // week — stops timesheets shifting after a week's closed out. Management
+    // isn't limited by this (checked here, not just by hiding the button, so
+    // it still holds even if the button was clicked before the week rolled over).
+    if (!isAdmin() && !isInCurrentWeek(log.date)){
+      return '<div class="card"><p class="empty-note">That entry is from a previous work week, so it can\'t be edited here anymore — ask a manager if it needs a correction.</p><button type="button" class="btn btn-outline" data-action="back-to-list">&larr; Back</button></div>';
+    }
     var job = state.jobs.filter(function(j){ return j.id === log.jobId; })[0];
     return renderJobForm({mode:"edit", job:job, log:log});
   }
@@ -792,7 +807,7 @@
     // shows each job's CURRENT status once, instead of a stale older entry.
     var seenJobs = {}, mine = [];
     state.jobLogs.forEach(function(l){
-      if (!l.employees || l.employees.indexOf(me) === -1) return;
+      if (l.trashed || !l.employees || l.employees.indexOf(me) === -1) return;
       var key = l.jobId || l.id;
       if (seenJobs[key]) return;
       seenJobs[key] = true;
@@ -810,15 +825,26 @@
   }
 
   function renderRecentLeaveForMe(me){
-    var mine = state.leaveLogs.filter(function(l){ return l.employee === me; })
+    var mine = state.leaveLogs.filter(function(l){ return l.employee === me && !l.trashed; })
       .slice().sort(function(a,b){ return (b.date||"").localeCompare(a.date||""); }).slice(0,5);
     if (mine.length === 0) return "";
     var html = '<div class="card"><div class="section-title" style="font-size:17px">Your recent leave</div>';
     mine.forEach(function(l){
       html += '<div class="log-card"><div class="log-top"><div><div class="log-venue">'+esc(leaveLabel(l.type))+'</div>' +
-        '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+leaveHours(l.type).toFixed(1)+'h</span></div></div></div>' +
-        '<div class="log-foot"><button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" data-edit-leave="'+esc(l.id)+'">Edit</button></div>' +
-      '</div>';
+        '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+leaveHours(l.type).toFixed(1)+'h</span></div></div></div>';
+      if (state.trashConfirmLeaveId === l.id){
+        html += '<div class="msg msg-error" style="margin-top:8px">Delete this leave day? It\'ll disappear from your timesheet — if that\'s a mistake, ask a manager to restore it.</div>';
+        html += '<div class="log-foot" style="gap:8px">' +
+          '<button type="button" class="btn btn-primary btn-sm" style="background:#b3261e; border-color:#b3261e;" data-confirm-trash-leave="'+esc(l.id)+'">Yes, delete it</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-trash-leave">Cancel</button>' +
+        '</div>';
+      } else {
+        html += '<div class="log-foot">' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-edit-leave="'+esc(l.id)+'">Edit</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" style="color:#b3261e; margin-left:auto" data-ask-trash-leave="'+esc(l.id)+'">Delete</button>' +
+        '</div>';
+      }
+      html += '</div>';
     });
     html += '</div>';
     return html;
@@ -918,7 +944,7 @@
 
   function renderOverview(){
     var wk = weekBounds(0);
-    var weekLogs = state.jobLogs.filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr); });
+    var weekLogs = state.jobLogs.filter(function(l){ return !l.trashed && inRange(l.date, wk.startStr, wk.endStr); });
     var totalHours = weekLogs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
     var openCount = openJobs().length;
 
@@ -951,7 +977,7 @@
     // Who's away this week (sick, annual, trade school, public holiday, unpaid) —
     // pulled straight from leave-logs, same week window as the stats above.
     var leaveThisWeek = state.leaveLogs
-      .filter(function(l){ return inRange(l.date, wk.startStr, wk.endStr); })
+      .filter(function(l){ return !l.trashed && inRange(l.date, wk.startStr, wk.endStr); })
       .slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
     if (leaveThisWeek.length){
       html += '<div class="card"><div class="section-title" style="font-size:17px">Who\'s away this week</div>';
@@ -1186,15 +1212,29 @@
         var entries = byDate[d];
         html += '<div class="timeline-item"><strong>'+fmtDay(d)+'</strong>';
         entries.forEach(function(l, idx){
+          var canChange = admin || isInCurrentWeek(l.date);
           html += '<div style="margin-top:4px;'+(idx>0?' padding-top:6px; border-top:1px dashed var(--line);':'')+'">' +
             '<span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span>'+(l.timeRange?' <span class="hint">('+esc(l.timeRange)+')</span>':'')+' &middot; '+esc(l.submittedBy||"")+
             (l.completed ? ' &middot; <span class="pill pill-success" style="padding:2px 7px">Completed</span>' : ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>') +
             (l.jobDescription ? '<br><span class="log-desc" style="margin-top:3px; display:inline-block;">'+esc(l.jobDescription)+'</span>' : '') +
             (l.materials ? '<br><span class="hint">Materials: '+esc(l.materials)+'</span>' : '') +
             (l.alsoOnsite ? '<br><span class="hint">Also onsite: '+esc(l.alsoOnsite)+'</span>' : '') +
-            (!l.completed && l.remainingWork ? '<br><span class="hint">Still to do: '+esc(l.remainingWork)+'</span>' : '') +
-            '<br><button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0" data-edit-log="'+esc(l.id)+'">Edit this entry</button>' +
-          '</div>';
+            (!l.completed && l.remainingWork ? '<br><span class="hint">Still to do: '+esc(l.remainingWork)+'</span>' : '');
+          if (canChange){
+            if (state.trashConfirmLogId === l.id){
+              html += '<div class="msg msg-error" style="margin-top:6px">Delete this entry? ' + (admin ? 'It\'ll move to the Trash tab, restorable any time.' : 'If that\'s a mistake, ask a manager to restore it.') + '</div>' +
+                '<div style="display:flex; gap:8px; margin-top:6px;">' +
+                '<button type="button" class="btn btn-primary btn-sm" style="background:#b3261e; border-color:#b3261e;" data-confirm-trash-log="'+esc(l.id)+'">Yes, delete it</button>' +
+                '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-trash-log">Cancel</button>' +
+              '</div>';
+            } else {
+              html += '<br><button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0" data-edit-log="'+esc(l.id)+'">Edit this entry</button>' +
+                '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0; color:#b3261e; margin-left:8px" data-ask-trash-log="'+esc(l.id)+'">Delete</button>';
+            }
+          } else {
+            html += '<br><span class="hint">From a previous work week — ask a manager to change or delete it.</span>';
+          }
+          html += '</div>';
         });
         html += '</div>';
       });
@@ -1302,6 +1342,21 @@
     }).catch(function(){ toast("Couldn't merge those jobs — try again."); });
   }
 
+  // Re-derives a job's open/closed state from whichever of its (non-deleted)
+  // visits is most recent — used after editing, deleting or restoring a
+  // visit, since any of those can change what "the latest update" is.
+  function recomputeJobOpen(jobId){
+    // Sort client-side instead of orderBy on the query — a where()+orderBy() on
+    // different fields needs a Firestore composite index, which this avoids.
+    return db.collection("job-logs").where("jobId","==",jobId).get().then(function(snap){
+      var docs = snap.docs.map(function(d){ return d.data(); }).filter(function(d){ return !d.trashed; });
+      if (!docs.length) return;
+      docs.sort(function(a,b){ return (b.submittedAt||"").localeCompare(a.submittedAt||""); });
+      var latest = docs[0];
+      return db.collection("jobs").doc(jobId).update({open: !latest.completed, lastUpdatedAt: new Date().toISOString()});
+    });
+  }
+
   // Permanently deletes a job and every logged visit under it. Firestore's
   // rules only allow this once "allow delete" is turned on for jobs and
   // job-logs (see firestore.rules) — see SETUP-EMAIL.md-style note in the
@@ -1335,6 +1390,60 @@
       .catch(function(){ toast("Couldn't restore that — try again."); });
   }
 
+  // Same soft-delete pattern as jobs — a leave day never really disappears,
+  // it just drops off every timesheet/list until a manager restores it from
+  // the Trash tab. Both crew and management can delete; only management can
+  // restore, same split as jobs.
+  function trashLeave(leaveId){
+    if (!db || !leaveId) return;
+    var l = state.leaveLogs.filter(function(x){ return x.id===leaveId; })[0];
+    if (!l) return;
+    db.collection("leave-logs").doc(leaveId).update({ trashed: true, trashedAt: new Date().toISOString() })
+      .then(function(){
+        toast("Deleted " + leaveLabel(l.type).toLowerCase());
+        state.trashConfirmLeaveId = null;
+        render();
+      }).catch(function(){ toast("Couldn't delete that — try again."); });
+  }
+
+  function restoreLeave(leaveId){
+    if (!db || !leaveId) return;
+    var l = state.leaveLogs.filter(function(x){ return x.id===leaveId; })[0];
+    if (!l) return;
+    db.collection("leave-logs").doc(leaveId).update({ trashed: false })
+      .then(function(){ toast("Restored " + leaveLabel(l.type).toLowerCase()); render(); })
+      .catch(function(){ toast("Couldn't restore that — try again."); });
+  }
+
+  // Deletes one logged visit, not the whole job — e.g. a duplicate or wrong
+  // entry. Same soft-delete/Trash-tab pattern as everything else. Crew can
+  // only do this (and edit) while the visit's date is still in the current
+  // work week (isInCurrentWeek) — management isn't limited by that. Either
+  // way, the job's open/follow-up status gets re-checked afterwards, since
+  // deleting or restoring a visit can change which update is "the latest".
+  function trashLog(logId){
+    if (!db || !logId) return;
+    var l = state.jobLogs.filter(function(x){ return x.id===logId; })[0];
+    if (!l) return;
+    db.collection("job-logs").doc(logId).update({ trashed: true, trashedAt: new Date().toISOString() })
+      .then(function(){ return recomputeJobOpen(l.jobId); })
+      .then(function(){
+        toast("Deleted that entry");
+        state.trashConfirmLogId = null;
+        render();
+      }).catch(function(){ toast("Couldn't delete that — try again."); });
+  }
+
+  function restoreLog(logId){
+    if (!db || !logId) return;
+    var l = state.jobLogs.filter(function(x){ return x.id===logId; })[0];
+    if (!l) return;
+    db.collection("job-logs").doc(logId).update({ trashed: false })
+      .then(function(){ return recomputeJobOpen(l.jobId); })
+      .then(function(){ toast("Restored that entry"); render(); })
+      .catch(function(){ toast("Couldn't restore that — try again."); });
+  }
+
   function renderJobsAdmin(){
     var filters = ["all","open","closed","invoiced"];
     var q = (state.venueQuery || "").trim().toLowerCase();
@@ -1346,7 +1455,7 @@
     var list;
     if (q){
       var logsByJob = {};
-      state.jobLogs.forEach(function(l){ (logsByJob[l.jobId] = logsByJob[l.jobId] || []).push(l); });
+      state.jobLogs.forEach(function(l){ if (l.trashed) return; (logsByJob[l.jobId] = logsByJob[l.jobId] || []).push(l); });
       function jobMatches(j){
         var hay = [j.venue, j.jobDescription, j.vtask, j.poNumber, j.client, (j.assignedEmployees||[]).join(" ")].join(" ").toLowerCase();
         if (hay.indexOf(q) !== -1) return true;
@@ -1438,10 +1547,14 @@
   function renderTrash(){
     var trashed = state.jobs.filter(function(j){ return j.trashed; });
     trashed.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
+    var trashedLeave = state.leaveLogs.filter(function(l){ return l.trashed; });
+    trashedLeave.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
+    var trashedLogs = state.jobLogs.filter(function(l){ return l.trashed; });
+    trashedLogs.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
 
     var html = '<div class="card">';
-    html += '<div class="section-title">Trash</div><p class="section-sub">Jobs moved here are hidden everywhere else but never deleted for good — restore any of them any time.</p>';
-    if (trashed.length===0){ html += '<p class="empty-note">Nothing in the trash.</p>'; }
+    html += '<div class="section-title">Trash</div><p class="section-sub">Jobs, visit entries and leave days moved here are hidden everywhere else but never deleted for good — restore any of them any time.</p>';
+    if (trashed.length===0 && trashedLeave.length===0 && trashedLogs.length===0){ html += '<p class="empty-note">Nothing in the trash.</p>'; }
     html += '</div>';
 
     trashed.forEach(function(j){
@@ -1452,6 +1565,25 @@
       html += '<button type="button" class="btn btn-outline btn-sm" style="margin-top:10px" data-restore-job="'+esc(j.id)+'">Restore</button>';
       html += '</div>';
     });
+
+    if (trashedLogs.length){
+      html += '<div class="card"><div class="section-title" style="font-size:17px">Deleted visit entries</div>';
+      trashedLogs.forEach(function(l){
+        var job = state.jobs.filter(function(j){ return j.id === l.jobId; })[0];
+        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(job?job.venue:"(job no longer exists)")+'</div><div class="email">'+esc(fmtDay(l.date))+' &middot; '+esc((l.employees||[]).join(", "))+'</div></div>' +
+          '<button type="button" class="btn btn-outline btn-sm" data-restore-log="'+esc(l.id)+'">Restore</button></div>';
+      });
+      html += '</div>';
+    }
+
+    if (trashedLeave.length){
+      html += '<div class="card"><div class="section-title" style="font-size:17px">Deleted leave days</div>';
+      trashedLeave.forEach(function(l){
+        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(l.employee)+'</div><div class="email">'+esc(leaveLabel(l.type))+' &middot; '+esc(fmtDay(l.date))+'</div></div>' +
+          '<button type="button" class="btn btn-outline btn-sm" data-restore-leave="'+esc(l.id)+'">Restore</button></div>';
+      });
+      html += '</div>';
+    }
     return html;
   }
 
@@ -1954,6 +2086,42 @@
     root.querySelectorAll("[data-restore-job]").forEach(function(b){ b.addEventListener("click", function(){
       restoreJob(b.getAttribute("data-restore-job"));
     }); });
+
+    var askTrashLeaveBtn = root.querySelector('[data-ask-trash-leave]');
+    if (askTrashLeaveBtn) askTrashLeaveBtn.addEventListener("click", function(){
+      state.trashConfirmLeaveId = askTrashLeaveBtn.getAttribute("data-ask-trash-leave");
+      render();
+    });
+    var cancelTrashLeaveBtn = root.querySelector('[data-action="cancel-trash-leave"]');
+    if (cancelTrashLeaveBtn) cancelTrashLeaveBtn.addEventListener("click", function(){
+      state.trashConfirmLeaveId = null;
+      render();
+    });
+    var confirmTrashLeaveBtn = root.querySelector('[data-confirm-trash-leave]');
+    if (confirmTrashLeaveBtn) confirmTrashLeaveBtn.addEventListener("click", function(){
+      trashLeave(confirmTrashLeaveBtn.getAttribute("data-confirm-trash-leave"));
+    });
+    root.querySelectorAll("[data-restore-leave]").forEach(function(b){ b.addEventListener("click", function(){
+      restoreLeave(b.getAttribute("data-restore-leave"));
+    }); });
+
+    var askTrashLogBtn = root.querySelector('[data-ask-trash-log]');
+    if (askTrashLogBtn) askTrashLogBtn.addEventListener("click", function(){
+      state.trashConfirmLogId = askTrashLogBtn.getAttribute("data-ask-trash-log");
+      render();
+    });
+    var cancelTrashLogBtn = root.querySelector('[data-action="cancel-trash-log"]');
+    if (cancelTrashLogBtn) cancelTrashLogBtn.addEventListener("click", function(){
+      state.trashConfirmLogId = null;
+      render();
+    });
+    var confirmTrashLogBtn = root.querySelector('[data-confirm-trash-log]');
+    if (confirmTrashLogBtn) confirmTrashLogBtn.addEventListener("click", function(){
+      trashLog(confirmTrashLogBtn.getAttribute("data-confirm-trash-log"));
+    });
+    root.querySelectorAll("[data-restore-log]").forEach(function(b){ b.addEventListener("click", function(){
+      restoreLog(b.getAttribute("data-restore-log"));
+    }); });
   }
 
   function onSubmitSetup(e){
@@ -2066,18 +2234,7 @@
     }
 
     state.formBusy = true; render();
-
-    function recomputeJobOpen(jobId){
-      // Sort client-side instead of orderBy on the query — a where()+orderBy() on
-      // different fields needs a Firestore composite index, which this avoids.
-      return db.collection("job-logs").where("jobId","==",jobId).get().then(function(snap){
-        if (!snap.docs.length) return;
-        var docs = snap.docs.map(function(d){ return d.data(); });
-        docs.sort(function(a,b){ return (b.submittedAt||"").localeCompare(a.submittedAt||""); });
-        var latest = docs[0];
-        return db.collection("jobs").doc(jobId).update({open: !latest.completed, lastUpdatedAt: new Date().toISOString()});
-      });
-    }
+    // recomputeJobOpen now lives at top level (shared with trashLog/restoreLog)
 
     function afterLog(jobId, venue){
       var logBody = {
