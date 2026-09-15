@@ -1053,6 +1053,7 @@
     }
     html += '</div>';
     html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">';
+    if (j.isMerged){ html += '<span class="pill" style="background:var(--amber-soft); color:var(--amber-ink); border:1px solid var(--amber);">Combined job</span>'; }
     html += '<span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span>';
     if (opts.admin){
       html += (j.invoiceAmount != null && j.invoiceAmount !== "")
@@ -1324,7 +1325,7 @@
       });
     }
 
-    var targetPatch = { lastUpdatedAt: new Date().toISOString(), venue: finalVenue };
+    var targetPatch = { lastUpdatedAt: new Date().toISOString(), venue: finalVenue, isMerged: true };
     var extraNames = (source.assignedEmployees||[]).filter(function(n){
       return (target.assignedEmployees||[]).indexOf(n) === -1;
     });
@@ -1445,7 +1446,7 @@
   }
 
   function renderJobsAdmin(){
-    var filters = ["all","open","closed","invoiced"];
+    var filters = ["all","open","closed","invoiced","merged"];
     var q = (state.venueQuery || "").trim().toLowerCase();
 
     var html = '<div class="card">';
@@ -1474,6 +1475,21 @@
       if (state.jobsStatusFilter === "open") list = list.filter(function(j){return j.open!==false && j.status!=="invoiced";});
       if (state.jobsStatusFilter === "closed") list = list.filter(function(j){return j.open===false && j.status!=="invoiced";});
       if (state.jobsStatusFilter === "invoiced") list = list.filter(function(j){return j.status==="invoiced";});
+      // "Merged" is a home base for jobs that have absorbed one or more other
+      // jobs (see performMerge) — these tend to be the bigger, multi-visit
+      // jobs Grace wants to keep an eye on separately from one-off single-visit
+      // jobs, right up until she's marked them complete/invoiced. It doesn't
+      // remove them from the other filters — it's just an easy way to find
+      // them all in one place. Open ones surface first, invoiced ones last.
+      if (state.jobsStatusFilter === "merged"){
+        list = list.filter(function(j){ return j.isMerged; });
+        list = list.slice().sort(function(a,b){
+          var rank = function(j){ return j.status==="invoiced" ? 2 : (j.status==="completed" ? 1 : 0); };
+          var r = rank(a) - rank(b);
+          if (r !== 0) return r;
+          return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||"");
+        });
+      }
       html += '<div class="seg" style="margin:14px 0" data-seg="jobsFilter">' +
         filters.map(function(f){ return '<button type="button" data-val="'+f+'" class="'+(state.jobsStatusFilter===f?"on":"")+'">'+f.charAt(0).toUpperCase()+f.slice(1)+'</button>'; }).join("") +
       '</div>';
