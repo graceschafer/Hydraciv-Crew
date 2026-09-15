@@ -316,6 +316,7 @@
     editingCrewId: null, crewFormError: "",
     glossaryOpen: false,
     leaveLogs: [], editLeaveId: null, leaveType: "sick",
+    subcontractorJobs: [], subJobBusy: false, subJobMsg: null, trashConfirmSubJobId: null,
   };
 
   function esc(s){
@@ -927,7 +928,7 @@
   // ---------- MANAGEMENT ----------
   function renderManagementTab(){
     var html = '<div class="subtabs">';
-    [["overview","Overview"],["jobs","Jobs"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["timesheets","Timesheets"],["crew","Crew"],["trash","Trash"]].forEach(function(t){
+    [["overview","Overview"],["jobs","Jobs"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["timesheets","Timesheets"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]].forEach(function(t){
       html += '<button data-mgmt="'+t[0]+'" class="'+(state.mgmtSub===t[0]?"on":"")+'">'+t[1]+'</button>';
     });
     html += '</div>';
@@ -937,6 +938,7 @@
     else if (state.mgmtSub === "drew") html += renderForDrew();
     else if (state.mgmtSub === "priced") html += renderPricedJobs();
     else if (state.mgmtSub === "timesheets") html += renderTimesheets();
+    else if (state.mgmtSub === "subs") html += renderSubcontractors();
     else if (state.mgmtSub === "trash") html += renderTrash();
     else html += renderCrewView();
     return html;
@@ -1560,6 +1562,133 @@
   }
 
   // ---------- Trash: jobs moved out of the way, restorable any time ----------
+  // Every subcontractor name that's ever been logged, most-recent first,
+  // deduplicated — same idea as uniqueVenues(), so the name field can
+  // autocomplete a repeat subbie instead of Grace retyping them, and the
+  // list doubles as a quick "who have we used" reference.
+  function uniqueSubNames(){
+    var seen={}, out=[];
+    state.subcontractorJobs.filter(function(s){ return !s.trashed; }).forEach(function(s){
+      if (s.name && !seen[s.name]){ seen[s.name]=1; out.push(s.name); }
+    });
+    return out;
+  }
+
+  // ---------- Subcontractors: outside people who do work for us but aren't
+  // on the crew roster and don't log in — Grace logs their jobs herself:
+  // name, job details, what they charged. Separate from crew timesheets on
+  // purpose (see firestore.rules).
+  function renderSubcontractors(){
+    var names = uniqueSubNames();
+    var list = state.subcontractorJobs.filter(function(s){ return !s.trashed; })
+      .slice().sort(function(a,b){ return (b.date||"").localeCompare(a.date||""); });
+    var total = list.reduce(function(s,x){ return s + (x.amountCharged!=null && x.amountCharged!=="" ? Number(x.amountCharged) : 0); }, 0);
+
+    var html = '<div class="card">';
+    html += '<div class="section-title">Log a subcontractor job</div>';
+    html += '<p class="section-sub">For people who do work for us but aren\'t on the crew roster — write their name, what the job was, and what they charged.</p>';
+    if (state.subJobMsg) html += '<div class="msg '+(state.subJobMsg.type==="error"?"msg-error":"msg-success")+'">'+esc(state.subJobMsg.text)+'</div>';
+    html += '<form id="sub-job-form">';
+    html += field("Subcontractor's name", '<div class="autocomplete-wrap"><input type="text" id="sub-name-input" name="name" placeholder="e.g. Bob\'s Plumbing" autocomplete="off" required>' +
+      '<div id="sub-name-suggestions" class="autocomplete-list" hidden></div></div>');
+    html += field("Venue / job site (optional)", '<input type="text" name="venue" placeholder="e.g. 14 Marlow St">');
+    html += field("Job details", '<textarea name="jobDescription" placeholder="What the job was" required></textarea>');
+    html += '<div class="row2">';
+    html += field("Date", '<input type="date" name="date" value="'+esc(todayStr())+'" required>');
+    html += field("Amount charged ($, optional)", '<input type="number" name="amountCharged" step="0.01" min="0" placeholder="e.g. 450.00">');
+    html += '</div>';
+    html += '<button type="submit" class="btn btn-primary btn-block" '+(state.subJobBusy?"disabled":"")+'>'+(state.subJobBusy?"Saving…":"Log subcontractor job")+'</button>';
+    html += '</form></div>';
+
+    html += '<div class="card">';
+    html += '<div class="section-title" style="font-size:17px">Subcontractor jobs</div>';
+    if (names.length) html += '<div class="chips" style="margin-top:2px">'+names.map(function(n){ return '<span class="pill pill-neutral">'+esc(n)+'</span>'; }).join("")+'</div>';
+    if (list.length) html += '<p class="section-sub" style="margin-top:10px">Total charged: <span class="mono">$'+total.toFixed(2)+'</span></p>';
+    if (list.length===0){ html += '<p class="empty-note" style="margin-top:10px">Nothing logged yet.</p>'; }
+    else {
+      list.forEach(function(s){
+        html += '<div class="job-card">';
+        html += '<div class="job-head"><div><div class="log-venue">'+esc(s.name)+'</div>';
+        html += '<div class="log-meta" style="margin-top:2px">'+esc(fmtDay(s.date))+(s.venue?' &middot; '+esc(s.venue):'')+'</div>';
+        html += '</div>';
+        html += (s.amountCharged != null && s.amountCharged !== "")
+          ? '<span class="pill pill-success mono">$'+Number(s.amountCharged).toFixed(2)+'</span>'
+          : '<span class="pill pill-neutral" style="border:1px dashed var(--line); background:transparent;">No amount</span>';
+        html += '</div>';
+        if (s.jobDescription) html += '<div class="log-desc" style="margin-top:8px">'+esc(s.jobDescription)+'</div>';
+        if (state.trashConfirmSubJobId === s.id){
+          html += '<div class="msg msg-error" style="margin-top:10px">Delete this entry? It\'ll move to the Trash tab, where you can restore it any time.</div>';
+          html += '<div style="display:flex; gap:10px; margin-top:10px;">' +
+            '<button type="button" class="btn btn-primary btn-sm" style="background:#b3261e; border-color:#b3261e;" data-confirm-trash-sub-job="'+esc(s.id)+'">Yes, delete it</button>' +
+            '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-trash-sub-job">Cancel</button>' +
+          '</div>';
+        } else {
+          html += '<div class="log-foot" style="margin-top:10px"><button type="button" class="btn btn-outline btn-sm" style="color:#b3261e; border-color:#b3261e; margin-left:auto" data-ask-trash-sub-job="'+esc(s.id)+'">Delete</button></div>';
+        }
+        html += '</div>';
+      });
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function onSubmitSubJob(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var name = f.name.value.trim();
+    var venue = f.venue.value.trim();
+    var jobDescription = f.jobDescription.value.trim();
+    var date = f.date.value;
+    var amtRaw = f.amountCharged.value.trim();
+    var parsedAmt = parseFloat(amtRaw);
+    var amountCharged = (amtRaw === "" || isNaN(parsedAmt)) ? null : Math.round(parsedAmt * 100) / 100;
+
+    if (!name || !jobDescription || !date){
+      state.subJobMsg = {type:"error", text:"Please fill in their name, the job details and the date."};
+      render(); return;
+    }
+
+    state.subJobBusy = true; state.subJobMsg = null; render();
+    db.collection("subcontractor-jobs").add({
+      name: name, venue: venue, jobDescription: jobDescription, date: date,
+      amountCharged: amountCharged, createdBy: (state.session && state.session.name) || "",
+      createdAt: new Date().toISOString(),
+    }).then(function(){
+      state.subJobBusy = false;
+      toast("Logged " + name + "'s job");
+      render();
+    }).catch(function(){
+      state.subJobBusy = false;
+      state.subJobMsg = {type:"error", text:"Couldn't save that — try again."};
+      render();
+    });
+  }
+
+  // Same soft-delete/Trash-tab pattern as jobs, visits and leave — nothing is
+  // ever really gone, it just drops out of the Subcontractors list until
+  // restored from the Trash tab.
+  function trashSubJob(id){
+    if (!db || !id) return;
+    var s = state.subcontractorJobs.filter(function(x){ return x.id===id; })[0];
+    if (!s) return;
+    db.collection("subcontractor-jobs").doc(id).update({ trashed: true, trashedAt: new Date().toISOString() })
+      .then(function(){
+        toast("Deleted " + (s.name||"that") + "'s job");
+        state.trashConfirmSubJobId = null;
+        render();
+      }).catch(function(){ toast("Couldn't delete that — try again."); });
+  }
+
+  function restoreSubJob(id){
+    if (!db || !id) return;
+    var s = state.subcontractorJobs.filter(function(x){ return x.id===id; })[0];
+    if (!s) return;
+    db.collection("subcontractor-jobs").doc(id).update({ trashed: false })
+      .then(function(){ toast("Restored " + (s.name||"that") + "'s job"); render(); })
+      .catch(function(){ toast("Couldn't restore that — try again."); });
+  }
+
   function renderTrash(){
     var trashed = state.jobs.filter(function(j){ return j.trashed; });
     trashed.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
@@ -1567,10 +1696,12 @@
     trashedLeave.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
     var trashedLogs = state.jobLogs.filter(function(l){ return l.trashed; });
     trashedLogs.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
+    var trashedSubJobs = state.subcontractorJobs.filter(function(s){ return s.trashed; });
+    trashedSubJobs.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
 
     var html = '<div class="card">';
-    html += '<div class="section-title">Trash</div><p class="section-sub">Jobs, visit entries and leave days moved here are hidden everywhere else but never deleted for good — restore any of them any time.</p>';
-    if (trashed.length===0 && trashedLeave.length===0 && trashedLogs.length===0){ html += '<p class="empty-note">Nothing in the trash.</p>'; }
+    html += '<div class="section-title">Trash</div><p class="section-sub">Jobs, visit entries, leave days and subcontractor jobs moved here are hidden everywhere else but never deleted for good — restore any of them any time.</p>';
+    if (trashed.length===0 && trashedLeave.length===0 && trashedLogs.length===0 && trashedSubJobs.length===0){ html += '<p class="empty-note">Nothing in the trash.</p>'; }
     html += '</div>';
 
     trashed.forEach(function(j){
@@ -1597,6 +1728,15 @@
       trashedLeave.forEach(function(l){
         html += '<div class="crew-row"><div class="info"><div class="name">'+esc(l.employee)+'</div><div class="email">'+esc(leaveLabel(l.type))+' &middot; '+esc(fmtDay(l.date))+'</div></div>' +
           '<button type="button" class="btn btn-outline btn-sm" data-restore-leave="'+esc(l.id)+'">Restore</button></div>';
+      });
+      html += '</div>';
+    }
+
+    if (trashedSubJobs.length){
+      html += '<div class="card"><div class="section-title" style="font-size:17px">Deleted subcontractor jobs</div>';
+      trashedSubJobs.forEach(function(s){
+        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(s.name)+'</div><div class="email">'+esc(fmtDay(s.date))+(s.venue?' &middot; '+esc(s.venue):'')+'</div></div>' +
+          '<button type="button" class="btn btn-outline btn-sm" data-restore-sub-job="'+esc(s.id)+'">Restore</button></div>';
       });
       html += '</div>';
     }
@@ -1806,6 +1946,7 @@
       jobs: state.jobs,
       jobLogs: state.jobLogs,
       leaveLogs: state.leaveLogs,
+      subcontractorJobs: state.subcontractorJobs,
     };
     try{
       var blob = new Blob([JSON.stringify(payload, null, 2)], {type: "application/json"});
@@ -2137,6 +2278,53 @@
     });
     root.querySelectorAll("[data-restore-log]").forEach(function(b){ b.addEventListener("click", function(){
       restoreLog(b.getAttribute("data-restore-log"));
+    }); });
+
+    var subJobForm = document.getElementById("sub-job-form");
+    if (subJobForm) subJobForm.addEventListener("submit", onSubmitSubJob);
+
+    // subcontractor-name autocomplete — same pattern as the venue autocomplete:
+    // past names show up as she types, so a repeat subbie doesn't need retyping.
+    var subNameInput = document.getElementById("sub-name-input");
+    var subNameSuggestions = document.getElementById("sub-name-suggestions");
+    if (subNameInput && subNameSuggestions){
+      var knownSubNames = uniqueSubNames();
+      var showSubNameMatches = function(){
+        var q = subNameInput.value.trim().toLowerCase();
+        if (!q){ subNameSuggestions.hidden = true; subNameSuggestions.innerHTML = ""; return; }
+        var matches = knownSubNames.filter(function(v){ return v.toLowerCase().indexOf(q) !== -1; }).slice(0,8);
+        if (!matches.length){ subNameSuggestions.hidden = true; subNameSuggestions.innerHTML = ""; return; }
+        subNameSuggestions.innerHTML = matches.map(function(v){ return '<button type="button">'+esc(v)+'</button>'; }).join("");
+        subNameSuggestions.hidden = false;
+      };
+      subNameInput.addEventListener("input", showSubNameMatches);
+      subNameInput.addEventListener("focus", showSubNameMatches);
+      subNameSuggestions.addEventListener("mousedown", function(e){
+        var btn = e.target.closest("button");
+        if (!btn) return;
+        e.preventDefault();
+        subNameInput.value = btn.textContent;
+        subNameSuggestions.hidden = true; subNameSuggestions.innerHTML = "";
+      });
+      subNameInput.addEventListener("blur", function(){ setTimeout(function(){ subNameSuggestions.hidden = true; }, 120); });
+    }
+
+    var askTrashSubJobBtn = root.querySelector('[data-ask-trash-sub-job]');
+    if (askTrashSubJobBtn) askTrashSubJobBtn.addEventListener("click", function(){
+      state.trashConfirmSubJobId = askTrashSubJobBtn.getAttribute("data-ask-trash-sub-job");
+      render();
+    });
+    var cancelTrashSubJobBtn = root.querySelector('[data-action="cancel-trash-sub-job"]');
+    if (cancelTrashSubJobBtn) cancelTrashSubJobBtn.addEventListener("click", function(){
+      state.trashConfirmSubJobId = null;
+      render();
+    });
+    var confirmTrashSubJobBtn = root.querySelector('[data-confirm-trash-sub-job]');
+    if (confirmTrashSubJobBtn) confirmTrashSubJobBtn.addEventListener("click", function(){
+      trashSubJob(confirmTrashSubJobBtn.getAttribute("data-confirm-trash-sub-job"));
+    });
+    root.querySelectorAll("[data-restore-sub-job]").forEach(function(b){ b.addEventListener("click", function(){
+      restoreSubJob(b.getAttribute("data-restore-sub-job"));
     }); });
   }
 
@@ -2482,6 +2670,11 @@
 
       db.collection("leave-logs").orderBy("createdAt","desc").limit(1000).onSnapshot(function(snap){
         state.leaveLogs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, onListenerError);
+
+      db.collection("subcontractor-jobs").orderBy("createdAt","desc").limit(1000).onSnapshot(function(snap){
+        state.subcontractorJobs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         render();
       }, onListenerError);
 
