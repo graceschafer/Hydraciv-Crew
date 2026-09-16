@@ -410,6 +410,9 @@
   // getNotifyEmail() / the "Notifications" card in renderCrewView().
   var DEFAULT_NOTIFY_EMAIL = "graceschafer3@gmail.com";
   function getNotifyEmail(){ return (state.notifyEmail || DEFAULT_NOTIFY_EMAIL); }
+  // Shared by the "new job" client picker and management's "Edit job details"
+  // client picker, so there's one list to keep in sync, not two.
+  var CLIENT_OPTIONS = ["ALH","Pubco/Supreme","MRC/Pegasus","Black Rhino","Other","Unsure"];
   var emailjsReady = false;
   try{
     if (window.emailjs && EMAILJS_PUBLIC_KEY.indexOf("YOUR_") !== 0){
@@ -728,7 +731,7 @@
       html += field("Venue / job site", '<div class="autocomplete-wrap"><input type="text" id="job-venue-input" name="venue" placeholder="e.g. 14 Marlow St — pump station" autocomplete="off" required>' +
         '<div id="venue-suggestions" class="autocomplete-list" hidden></div></div>');
       html += '<div class="field"><label>Client</label><div class="seg" data-seg="client">' +
-        ["ALH","Pubco/Supreme","MRC/Pegasus","Black Rhino","Other","Unsure"].map(function(c){
+        CLIENT_OPTIONS.map(function(c){
           return '<button type="button" data-val="'+esc(c)+'">'+esc(c)+'</button>';
         }).join("") +
       '</div></div>';
@@ -1083,6 +1086,14 @@
     html += field("Venue / job site", '<input type="text" name="venue" value="'+esc(j.venue||"")+'" required>');
     html += field("Job description", '<textarea name="jobDescription" required>'+esc(j.jobDescription||"")+'</textarea>');
     if (opts.admin){
+      // Crew pick this when they start a job on site, and it's easy to tap
+      // the wrong pub group in a hurry — this is management's way to fix it
+      // after the fact, which nothing else in the app currently allows.
+      html += '<div class="field"><label>Client</label><div class="seg" data-seg="editClient">' +
+        CLIENT_OPTIONS.map(function(c){
+          return '<button type="button" data-val="'+esc(c)+'" class="'+(j.client===c?"on":"")+'">'+esc(c)+'</button>';
+        }).join("") +
+      '</div></div>';
       html += field("VTASK number (optional)", '<input type="text" name="vtask" value="'+esc(j.vtask||"")+'">');
       html += field("Purchase order (optional)", '<input type="text" name="poNumber" value="'+esc(j.poNumber||"")+'">');
       html += field("Invoice amount ($, optional)", '<input type="number" name="invoiceAmount" step="0.01" min="0" placeholder="e.g. 450.00" value="'+(j.invoiceAmount!=null?esc(j.invoiceAmount):"")+'">');
@@ -2614,6 +2625,8 @@
     var jobDescription = f.jobDescription.value.trim();
     if (!venue || !jobDescription) return;
     var patch = {venue: venue, jobDescription: jobDescription};
+    var clientOn = f.querySelector('[data-seg="editClient"] .on');
+    if (clientOn) patch.client = clientOn.getAttribute("data-val");
     if (f.vtask) patch.vtask = f.vtask.value.trim();
     if (f.poNumber) patch.poNumber = f.poNumber.value.trim();
     if (f.invoiceAmount){
