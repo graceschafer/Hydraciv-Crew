@@ -178,6 +178,7 @@
   .picker-btn{text-align:left; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:13px 14px; font-weight:600; cursor:pointer; color:var(--ink); font-size:15px;}
   .picker-btn:hover{border-color:var(--accent);}
   .picker-btn.sel{border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong);}
+  .login-pin-drop{background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:14px; margin:-2px 0 2px;}
 
   .pin-dots{display:flex; gap:10px; justify-content:center; margin:6px 0 4px;}
   .pin-input{width:100%; text-align:center; font-family:"IBM Plex Mono",monospace; font-size:26px; letter-spacing:.5em; padding:12px !important;}
@@ -610,32 +611,42 @@
   }
 
   // ---------- LOGIN ----------
+  // The PIN entry (or first-time "set a PIN") step for whoever's selected —
+  // rendered right under their name in the picker list, not down the bottom
+  // of the whole list, so it reads as "this name expanded" rather than a
+  // separate unrelated block underneath everyone.
+  function renderLoginPinBlock(crewMember){
+    var login = crewMember ? loginFor(crewMember.id) : null;
+    var html = '<div class="login-pin-drop">';
+    if (!login || !login.pin){
+      html += '<div class="msg msg-info">First time logging in — set a 4-digit PIN you\'ll use from now on.</div>';
+      if (state.pinError) html += '<div class="msg msg-error">'+esc(state.pinError)+'</div>';
+      html += '<form id="setpin-form">';
+      html += field("Create a PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin" class="pin-input" placeholder="••••" autofocus required>');
+      html += field("Confirm PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin2" class="pin-input" placeholder="••••" required>');
+      html += '<button type="submit" class="btn btn-primary btn-block">Set PIN &amp; log in</button>';
+      html += '</form>';
+    } else {
+      if (state.loginError) html += '<div class="msg msg-error">'+esc(state.loginError)+'</div>';
+      html += '<form id="login-form">';
+      html += field("PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin" class="pin-input" placeholder="••••" autofocus required>');
+      html += '<button type="submit" class="btn btn-primary btn-block">Log in</button>';
+      html += '</form>';
+    }
+    html += '</div>';
+    return html;
+  }
+
   function renderLogin(){
     var html = '<div class="card center-card"><div class="section-title">Log in</div><p class="section-sub">Select your name to continue.</p>';
-    html += '<div class="field"><label>Your name</label><div class="picker-list">' + activeCrew().map(function(c){
-      return '<button type="button" class="picker-btn'+(state.loginName===c.name?" sel":"")+'" data-login-name="'+esc(c.name)+'">'+esc(c.name)+'</button>';
-    }).join("") + '</div></div>';
-
-    // Everyone — crew and managers alike — sets a PIN on first login.
-    if (state.loginName){
-      var crewMember = activeCrew().filter(function(c){ return c.name === state.loginName; })[0];
-      var login = crewMember ? loginFor(crewMember.id) : null;
-      if (!login || !login.pin){
-        html += '<div class="msg msg-info">First time logging in — set a 4-digit PIN you\'ll use from now on.</div>';
-        if (state.pinError) html += '<div class="msg msg-error">'+esc(state.pinError)+'</div>';
-        html += '<form id="setpin-form">';
-        html += field("Create a PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin" class="pin-input" placeholder="••••" autofocus required>');
-        html += field("Confirm PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin2" class="pin-input" placeholder="••••" required>');
-        html += '<button type="submit" class="btn btn-primary btn-block">Set PIN &amp; log in</button>';
-        html += '</form>';
-      } else {
-        if (state.loginError) html += '<div class="msg msg-error">'+esc(state.loginError)+'</div>';
-        html += '<form id="login-form">';
-        html += field("PIN", '<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" name="pin" class="pin-input" placeholder="••••" autofocus required>');
-        html += '<button type="submit" class="btn btn-primary btn-block">Log in</button>';
-        html += '</form>';
-      }
-    }
+    html += '<div class="field"><label>Your name</label><div class="picker-list">';
+    activeCrew().forEach(function(c){
+      var sel = state.loginName === c.name;
+      html += '<button type="button" class="picker-btn'+(sel?" sel":"")+'" data-login-name="'+esc(c.name)+'">'+esc(c.name)+'</button>';
+      // Everyone — crew and managers alike — sets a PIN on first login.
+      if (sel) html += renderLoginPinBlock(c);
+    });
+    html += '</div></div>';
     html += '</div>';
     return html;
   }
@@ -1175,6 +1186,10 @@
       html += '<button type="button" class="btn btn-ghost btn-sm" data-email-job="'+esc(j.id)+'">Email</button>';
     }
     if (admin){
+      // For pasting straight into the Word invoice / ALH's upload system —
+      // venue, description, every visit, materials, hours and price, as
+      // plain text ready to paste rather than selecting it off the screen.
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-copy-job="'+esc(j.id)+'">Copy for invoice</button>';
       html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
       html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-merge" data-job-id="'+esc(j.id)+'">Merge into another job&hellip;</button>';
     }
@@ -1872,6 +1887,66 @@
     });
   }
 
+  // Plain text, ready to paste straight into a Word invoice or ALH's upload
+  // system: venue/client/reference numbers, the description, every visit
+  // (so an ongoing multi-week job reads as one clear list of what was done),
+  // Mirrors Grace's actual Word invoice layout (client, venue, VTASK/PO
+  // reference line, description, then Amount/GST/Total) so this pastes
+  // straight into the template instead of needing reshaping. GST is always
+  // worked out at 10% from the entered amount (treated as excl. GST) —
+  // that's the exact "$ .00" spot she's had come out blank by hand.
+  var GST_RATE = 0.10;
+  function buildJobInvoiceText(j){
+    var logs = jobLogsFor(j.id).slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+    var lines = [];
+
+    if (j.client) { lines.push(j.client); lines.push(""); }
+    lines.push(j.venue || "");
+
+    var refParts = [];
+    if (j.vtask) refParts.push("VTASK" + j.vtask);
+    if (j.poNumber) refParts.push((j.client ? j.client + " " : "") + "Purchase Order #" + j.poNumber);
+    if (refParts.length) lines.push(refParts.join(" "));
+    lines.push("");
+
+    if (j.jobDescription){ lines.push("Description:"); lines.push(j.jobDescription); }
+
+    // Only for a job that ran across more than one visit — a single-visit
+    // job (like the roof clean this was built from) needs nothing extra,
+    // but an ongoing multi-week job still needs each visit accounted for.
+    if (logs.length > 1){
+      lines.push("");
+      lines.push("Work performed, by visit:");
+      logs.forEach(function(l){
+        var hrs = (l.hours!=null && l.hours!=="") ? l.hours+"h" : "";
+        var bit = fmtDay(l.date) + (hrs ? " — " + hrs : "");
+        if (l.jobDescription && l.jobDescription !== j.jobDescription) bit += ": " + l.jobDescription;
+        lines.push("- " + bit);
+      });
+    }
+    lines.push("");
+
+    if (j.invoiceAmount != null && j.invoiceAmount !== ""){
+      var amount = Number(j.invoiceAmount);
+      var gst = Math.round(amount * GST_RATE * 100) / 100;
+      var total = Math.round((amount + gst) * 100) / 100;
+      lines.push("Amount $" + amount.toFixed(2));
+      lines.push("GST Payable $" + gst.toFixed(2));
+      lines.push("Total Amount Payable Including GST $" + total.toFixed(2));
+    }
+
+    return lines.join("\n");
+  }
+
+  function copyJobForInvoice(jobId){
+    var j = state.jobs.filter(function(x){ return x.id===jobId; })[0];
+    if (!j) return;
+    var text = buildJobInvoiceText(j);
+    copyTextToClipboard(text, function(ok){
+      toast(ok ? "Copied — paste into your invoice" : "Couldn't copy automatically — select and copy manually");
+    });
+  }
+
   function copyTextToClipboard(text, cb){
     if (navigator.clipboard && navigator.clipboard.writeText){
       navigator.clipboard.writeText(text).then(function(){ cb(true); }).catch(function(){ fallbackCopyText(text, cb); });
@@ -2200,6 +2275,7 @@
     root.querySelectorAll("[data-copy-ts]").forEach(function(b){ b.addEventListener("click", function(){ copyTimesheetFor(b.getAttribute("data-copy-ts")); }); });
     root.querySelectorAll("[data-print-ts]").forEach(function(b){ b.addEventListener("click", function(){ printTimesheetFor(b.getAttribute("data-print-ts")); }); });
     root.querySelectorAll("[data-print-job]").forEach(function(b){ b.addEventListener("click", function(){ printJob(b.getAttribute("data-print-job")); }); });
+    root.querySelectorAll("[data-copy-job]").forEach(function(b){ b.addEventListener("click", function(){ copyJobForInvoice(b.getAttribute("data-copy-job")); }); });
 
     root.querySelectorAll("[data-bycrew-emp]").forEach(function(b){ b.addEventListener("click", function(){
       var name = b.getAttribute("data-bycrew-emp");
