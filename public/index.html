@@ -308,7 +308,7 @@
     byCrewEmployee: null,
     venueQuery: "",
     crewJobsTab: "open",
-    viewingJobId: null,
+    viewingJobId: null, jobActionsOpen: false,
     mergeSourceId: null, mergeQuery: "", mergeTargetCandidateId: null,
     trashConfirmJobId: null, trashConfirmLeaveId: null, trashConfirmLogId: null,
     syncError: false,
@@ -1231,27 +1231,39 @@
     if (metaBits.length) html += '<div class="log-meta" style="margin-top:6px">'+metaBits.join(' &middot; ')+'</div>';
     if (admin && j.comments) html += '<div class="hint" style="margin-top:8px">Notes: '+esc(j.comments)+'</div>';
 
+    // Only the actions used on most jobs, most of the time, sit in view by
+    // default. Print/Email/Copy for invoice/Send to Drew/Merge are all real
+    // and all stay one tap away — they're just office/paperwork actions you
+    // reach for occasionally, not every time you open a job, so they're
+    // tucked under "More actions" instead of competing for attention here.
+    var hasMoreActions = (admin || j.open !== false) || admin;
     html += '<div class="log-foot" style="margin-top:14px">';
     if (employeeView){ html += '<button type="button" class="btn btn-outline btn-sm" data-add-update="'+esc(j.id)+'">Add update</button>'; }
     html += '<button type="button" class="btn btn-ghost btn-sm" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">Edit job details</button>';
-    // Print/Email are office paperwork actions — once a job's done, a crew
-    // member looking back at it from their Completed tab doesn't need them.
-    if (admin || j.open !== false){
-      html += '<button type="button" class="btn btn-ghost btn-sm" data-print-job="'+esc(j.id)+'">Print</button>';
-      html += '<button type="button" class="btn btn-ghost btn-sm" data-email-job="'+esc(j.id)+'">Email</button>';
-    }
-    if (admin){
-      // For pasting straight into the Word invoice / ALH's upload system —
-      // venue, description, every visit, materials, hours and price, as
-      // plain text ready to paste rather than selecting it off the screen.
-      html += '<button type="button" class="btn btn-ghost btn-sm" data-copy-job="'+esc(j.id)+'">Copy for invoice</button>';
-      html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
-      html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-merge" data-job-id="'+esc(j.id)+'">Merge into another job&hellip;</button>';
-    }
     // Trash is open to crew too — e.g. an accidental duplicate job — not just
     // management. Same confirm-before-you-do-it step either way.
     html += '<button type="button" class="btn btn-outline btn-sm" style="color:#b3261e; border-color:#b3261e;" data-action="ask-trash-job" data-job-id="'+esc(j.id)+'">Move to trash&hellip;</button>';
+    if (hasMoreActions) html += '<button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" data-action="toggle-job-actions" data-job-id="'+esc(j.id)+'">'+(state.jobActionsOpen?"Hide more actions":"More actions")+'</button>';
     html += '</div>';
+
+    if (hasMoreActions && state.jobActionsOpen){
+      html += '<div class="log-foot" style="margin-top:6px; padding-top:10px; border-top:1px dashed var(--line);">';
+      // Print/Email are office paperwork actions — once a job's done, a crew
+      // member looking back at it from their Completed tab doesn't need them.
+      if (admin || j.open !== false){
+        html += '<button type="button" class="btn btn-ghost btn-sm" data-print-job="'+esc(j.id)+'">Print</button>';
+        html += '<button type="button" class="btn btn-ghost btn-sm" data-email-job="'+esc(j.id)+'">Email</button>';
+      }
+      if (admin){
+        // For pasting straight into the Word invoice / ALH's upload system —
+        // venue, description, every visit, materials, hours and price, as
+        // plain text ready to paste rather than selecting it off the screen.
+        html += '<button type="button" class="btn btn-ghost btn-sm" data-copy-job="'+esc(j.id)+'">Copy for invoice</button>';
+        html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
+        html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-merge" data-job-id="'+esc(j.id)+'">Merge into another job&hellip;</button>';
+      }
+      html += '</div>';
+    }
 
     if (state.trashConfirmJobId === j.id){
       html += '<div class="msg msg-error" style="margin-top:10px">Move &ldquo;'+esc(j.venue)+'&rdquo; to the trash? It\'ll disappear from every list' + (admin ? ', but you can restore it later from the Trash tab.' : ' — if that\'s a mistake, ask a manager to restore it for you.') + '</div>';
@@ -2353,9 +2365,11 @@
     root.querySelectorAll("[data-job-status-select]").forEach(function(sel){
       sel.addEventListener("change", function(){ setJobStatus(sel.getAttribute("data-job-status-select"), sel.value); });
     });
-    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); render(); }); });
+    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); state.jobActionsOpen = false; render(); }); });
     var closeJobDetailBtn = root.querySelector('[data-action="close-job-detail"]');
-    if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){ state.viewingJobId=null; state.editingJobId=null; render(); });
+    if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){ state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; render(); });
+    var toggleJobActionsBtn = root.querySelector('[data-action="toggle-job-actions"]');
+    if (toggleJobActionsBtn) toggleJobActionsBtn.addEventListener("click", function(){ state.jobActionsOpen = !state.jobActionsOpen; render(); });
     root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
     root.querySelectorAll("[data-email-job]").forEach(function(b){ b.addEventListener("click", function(){ emailJob(b.getAttribute("data-email-job")); }); });
     root.querySelectorAll("[data-email-ts]").forEach(function(b){ b.addEventListener("click", function(){ emailTimesheetFor(b.getAttribute("data-email-ts")); }); });
