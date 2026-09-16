@@ -339,6 +339,14 @@
     return {startStr: dateToStr(mon), endStr: dateToStr(sun)};
   }
   function inRange(d,a,b){ return d>=a && d<=b; }
+  // Whole days between an ISO timestamp (fmtTime-style, e.g. lastUpdatedAt) and
+  // now — used for "priced 6 days ago" style aging notes. Never negative.
+  function daysSince(iso){
+    if (!iso) return null;
+    var then = new Date(iso).getTime();
+    if (isNaN(then)) return null;
+    return Math.max(0, Math.floor((Date.now() - then) / 86400000));
+  }
   function numHours(v){ var n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
   // Crew can only edit/delete a visit they logged while its date is still in
@@ -1063,6 +1071,7 @@
         : '<span class="pill pill-neutral" style="border:1px dashed var(--line); background:transparent;">No price yet</span>';
     }
     html += '</div></div>';
+    if (opts.agingNote){ html += '<div class="hint" style="'+esc(opts.agingNoteStyle||"")+'; margin-top:6px;">'+esc(opts.agingNote)+'</div>'; }
     html += '<div class="job-card-cta">Tap for full details <span aria-hidden="true">&rarr;</span></div>';
     html += '</div>';
     return html;
@@ -1553,14 +1562,21 @@
   // ---------- Priced: has a price, not yet marked Invoiced ----------
   function renderPricedJobs(){
     var priced = visibleJobs().filter(function(j){ return j.invoiceAmount != null && j.invoiceAmount !== "" && j.status !== "invoiced"; });
-    var byRecent = function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); };
-    priced.sort(byRecent);
+    // Oldest-waiting first — the ones most at risk of being forgotten belong
+    // at the top, not buried under whatever was priced most recently.
+    var withAge = priced.map(function(j){ return {job:j, age: daysSince(j.pricedAt || j.lastUpdatedAt || j.createdAt)}; });
+    withAge.sort(function(a,b){ return (b.age==null?-1:b.age) - (a.age==null?-1:a.age); });
 
     var html = '<div class="card">';
-    html += '<div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Jobs tab.</p>';
+    html += '<div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Jobs tab. Oldest waiting first.</p>';
     if (priced.length===0){ html += '<p class="empty-note">Nothing priced and waiting right now.</p>'; }
     html += '</div>';
-    priced.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
+    withAge.forEach(function(row){
+      var age = row.age;
+      var note = age==null ? "" : (age===0 ? "Priced today" : "Waiting " + age + " day" + (age===1?"":"s") + (row.job.pricedAt ? "" : " (approx.)"));
+      var style = (age!=null && age>=5) ? "color:#b3261e; font-weight:700;" : "";
+      html += renderJobCard(row.job, {admin:true, agingNote: note, agingNoteStyle: style});
+    });
     return html;
   }
 
@@ -2604,6 +2620,16 @@
       var amt = f.invoiceAmount.value.trim();
       var parsedAmt = parseFloat(amt);
       patch.invoiceAmount = (amt === "" || isNaN(parsedAmt)) ? null : Math.round(parsedAmt * 100) / 100;
+      // Stamp when a price first lands on the job — this is what lets the
+      // Priced tab show "waiting X days", the actual clock Grace wants on
+      // unbilled jobs. Only stamped on the transition from no price to a
+      // price, and cleared if the price is removed, so it always reflects
+      // how long the CURRENT price has been sitting there.
+      var jobBefore = state.jobs.filter(function(x){ return x.id===jobId; })[0];
+      var hadAmount = jobBefore && jobBefore.invoiceAmount != null && jobBefore.invoiceAmount !== "";
+      var hasAmount = patch.invoiceAmount != null;
+      if (hasAmount && !hadAmount) patch.pricedAt = new Date().toISOString();
+      else if (!hasAmount) patch.pricedAt = null;
     }
     if (f.comments) patch.comments = f.comments.value.trim();
     db.collection("jobs").doc(jobId).update(patch).then(function(){
