@@ -804,7 +804,7 @@
       '<button type="button" data-val="mine" class="'+(jobStatusVal==="mine"?"on":"")+'">My part&rsquo;s done</button>' +
     '</div></div>';
 
-    html += '<div id="followup-fields" style="display:'+(jobStatusVal==="yes"?"none":"block")+'">';
+    html += '<div id="followup-fields" style="display:'+(jobStatusVal==="no"?"block":"none")+'">';
     var returnUnsureVal = isEdit ? !!log.returnUnsure : false;
     html += '<div class="field"><label>Estimated return date</label>' +
       '<input type="date" id="estimated-return-input" name="estimatedReturn" value="'+esc(isEdit?(log.estimatedReturn||""):"")+'" '+(returnUnsureVal?"disabled":"")+'>' +
@@ -812,6 +812,7 @@
       '<input type="hidden" name="returnUnsure" value="'+(returnUnsureVal?"1":"")+'">' +
     '</div>';
     html += field("Work still to do", '<textarea name="remainingWork" placeholder="What\'s left to finish next visit">'+(isEdit?esc(log.remainingWork||""):"")+'</textarea>');
+    html += '</div>';
 
     var handoffUnsureVal = isEdit ? !!log.handoffUnsure : false;
     html += '<div id="handoff-fields" style="display:'+(jobStatusVal==="mine"?"block":"none")+'">';
@@ -2400,7 +2401,7 @@
           if (name === "completed"){
             var val = b.getAttribute("data-val");
             var ff = document.getElementById("followup-fields");
-            if (ff) ff.style.display = (val==="yes") ? "none" : "block";
+            if (ff) ff.style.display = (val==="no") ? "block" : "none";
             var hf = document.getElementById("handoff-fields");
             if (hf) hf.style.display = (val==="mine") ? "block" : "none";
           }
@@ -2763,9 +2764,12 @@
     var employees = [state.session.name];
     var alsoOnsite = f.alsoOnsite ? f.alsoOnsite.value.trim() : "";
     var materials = f.materials.value.trim();
-    var estimatedReturn = f.estimatedReturn ? f.estimatedReturn.value : "";
-    var returnUnsure = f.returnUnsure ? f.returnUnsure.value === "1" : false;
-    var remainingWork = f.remainingWork ? f.remainingWork.value.trim() : "";
+    // Estimated return / Work still to do only apply to "Not finished" — for
+    // "Completed" or "My part's done" those fields are hidden in the form, so
+    // ignore whatever's left over in them from an earlier status selection.
+    var estimatedReturn = (jobStatusVal === "no" && f.estimatedReturn) ? f.estimatedReturn.value : "";
+    var returnUnsure = (jobStatusVal === "no" && f.returnUnsure) ? f.returnUnsure.value === "1" : false;
+    var remainingWork = (jobStatusVal === "no" && f.remainingWork) ? f.remainingWork.value.trim() : "";
     var handoffTo = f.handoffTo ? f.handoffTo.value.trim() : "";
     var handoffUnsure = f.handoffUnsure ? f.handoffUnsure.value === "1" : false;
 
