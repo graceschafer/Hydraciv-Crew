@@ -448,7 +448,7 @@
       ["Hours", j.hours], ["Crew onsite", j.employees.join(", ")], ["Materials", j.materials || "—"],
     ];
     if (!j.completed){
-      rows.push(["Est. return", j.estimatedReturn ? fmtShort(j.estimatedReturn) : "—"]);
+      rows.push(["Est. return", j.returnUnsure ? "Not sure yet" : (j.estimatedReturn ? fmtShort(j.estimatedReturn) : "—")]);
       rows.push(["Still to do", j.remainingWork || "—"]);
     }
     var bodyHtml = '<div style="margin-bottom:14px">' + statusHtml + '</div><table style="width:100%;border-collapse:collapse;font-size:13.5px;">';
@@ -754,7 +754,10 @@
     html += field("Date", '<input type="date" name="date" value="'+esc(isEdit?(log.date||todayStr()):todayStr())+'" required>');
     html += field("Hours worked", '<input type="text" name="hours" value="'+esc(isEdit?(log.hours||""):"")+'" placeholder="e.g. 6.5 or 6.5h" required>');
     html += '</div>';
-    html += field("Time (optional)", '<input type="text" name="timeRange" value="'+(isEdit?esc(log.timeRange||""):"")+'" placeholder="e.g. 7am–10am">');
+    html += '<div class="field"><label>Time</label>' +
+      '<input type="text" name="timeRange" value="'+(isEdit?esc(log.timeRange||""):"")+'" placeholder="e.g. 7am–10am">' +
+      '<p class="hint" style="margin:4px 0 0">Working past 3:30pm? Write the time — that\'s overtime and we need it for invoicing.</p>' +
+    '</div>';
 
     var loggedUnder = isEdit ? (log.submittedBy || (log.employees && log.employees[0]) || "") : state.session.name;
     html += '<div class="field"><label>Logged under</label><p class="hint" style="margin:2px 0 0">'+esc(loggedUnder)+'\'s timesheet. Ticking or typing someone else\'s name here won\'t add hours to their sheet.</p></div>';
@@ -767,7 +770,12 @@
       '<button type="button" data-val="yes" class="'+(completedVal?"on":"")+'">Completed</button><button type="button" data-val="no" class="'+(!completedVal?"on":"")+'">Not finished</button></div></div>';
 
     html += '<div id="followup-fields" style="display:'+(completedVal?"none":"block")+'">';
-    html += field("Estimated return date", '<input type="date" name="estimatedReturn" value="'+esc(isEdit?(log.estimatedReturn||""):"")+'">');
+    var returnUnsureVal = isEdit ? !!log.returnUnsure : false;
+    html += '<div class="field"><label>Estimated return date</label>' +
+      '<input type="date" id="estimated-return-input" name="estimatedReturn" value="'+esc(isEdit?(log.estimatedReturn||""):"")+'" '+(returnUnsureVal?"disabled":"")+'>' +
+      '<button type="button" id="return-unsure-btn" class="btn btn-outline btn-sm'+(returnUnsureVal?" on":"")+'" style="margin-top:6px" data-on="'+(returnUnsureVal?"1":"")+'">'+(returnUnsureVal?"✓ Not sure yet":"Not sure yet")+'</button>' +
+      '<input type="hidden" name="returnUnsure" value="'+(returnUnsureVal?"1":"")+'">' +
+    '</div>';
     html += field("Work still to do", '<textarea name="remainingWork" placeholder="What\'s left to finish next visit">'+(isEdit?esc(log.remainingWork||""):"")+'</textarea>');
     html += '</div>';
 
@@ -939,7 +947,7 @@
     html += '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span>'+(l.timeRange?' ('+esc(l.timeRange)+')':'')+' &middot; '+esc((l.employees||[]).join(", "))+'</div></div>';
     html += '<div style="text-align:right">'+statusPill+'</div></div>';
     if (l.materials){ html += '<div class="log-body"><strong>Materials:</strong> '+esc(l.materials)+'</div>'; }
-    if (!l.completed){ html += '<div class="log-followup"><strong>Est. return:</strong> '+(l.estimatedReturn?fmtShort(l.estimatedReturn):"—")+'<br><strong>Still to do:</strong> '+esc(l.remainingWork||"—")+'</div>'; }
+    if (!l.completed){ html += '<div class="log-followup"><strong>Est. return:</strong> '+(l.returnUnsure?"Not sure yet":(l.estimatedReturn?fmtShort(l.estimatedReturn):"—"))+'<br><strong>Still to do:</strong> '+esc(l.remainingWork||"—")+'</div>'; }
     html += '<div class="log-foot"><span class="hint">logged by '+esc(l.submittedBy||"")+' &middot; '+fmtTime(l.submittedAt)+'</span>';
     if (opts.editable){ html += '<button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" data-edit-log="'+esc(l.id)+'">Edit</button>'; }
     html += '</div>';
@@ -2240,6 +2248,21 @@
     var jobForm = document.getElementById("job-form");
     if (jobForm) jobForm.addEventListener("submit", onSubmitJobForm);
 
+    // "Not sure yet" on estimated return date — clears and disables the date
+    // input instead of leaving crew to guess whether a blank date is fine to
+    // submit or something they forgot to fill in.
+    var returnUnsureBtn = document.getElementById("return-unsure-btn");
+    if (returnUnsureBtn) returnUnsureBtn.addEventListener("click", function(){
+      var input = document.getElementById("estimated-return-input");
+      var hidden = jobForm ? jobForm.querySelector('input[name="returnUnsure"]') : null;
+      var nowUnsure = returnUnsureBtn.getAttribute("data-on") !== "1";
+      returnUnsureBtn.setAttribute("data-on", nowUnsure ? "1" : "");
+      returnUnsureBtn.classList.toggle("on", nowUnsure);
+      returnUnsureBtn.textContent = nowUnsure ? "✓ Not sure yet" : "Not sure yet";
+      if (input){ input.disabled = nowUnsure; if (nowUnsure) input.value = ""; }
+      if (hidden) hidden.value = nowUnsure ? "1" : "";
+    });
+
     var crewForm = document.getElementById("crew-form");
     if (crewForm) crewForm.addEventListener("submit", onSubmitCrew);
     var crewToggleBtn = root.querySelector('[data-action="toggle-crew-form"]');
@@ -2532,14 +2555,11 @@
     var alsoOnsite = f.alsoOnsite ? f.alsoOnsite.value.trim() : "";
     var materials = f.materials.value.trim();
     var estimatedReturn = f.estimatedReturn ? f.estimatedReturn.value : "";
+    var returnUnsure = f.returnUnsure ? f.returnUnsure.value === "1" : false;
     var remainingWork = f.remainingWork ? f.remainingWork.value.trim() : "";
 
     if (!jobDescription || !date || !hours){
       state.formMsg = {type:"error", text:"Please fill in the job description, date and hours."};
-      render(); return;
-    }
-    if (!completed && !remainingWork){
-      state.formMsg = {type:"error", text:"Add what's still to do so the follow-up is clear."};
       render(); return;
     }
 
@@ -2550,7 +2570,8 @@
       var logBody = {
         jobId: jobId, venue: venue, date: date, hours: hours, timeRange: timeRange, jobDescription: jobDescription,
         materials: materials, completed: completed, alsoOnsite: alsoOnsite,
-        estimatedReturn: completed ? "" : estimatedReturn, remainingWork: completed ? "" : remainingWork,
+        estimatedReturn: completed ? "" : estimatedReturn, returnUnsure: completed ? false : returnUnsure,
+        remainingWork: completed ? "" : remainingWork,
         employees: employees, submittedBy: state.session.name, submittedAt: new Date().toISOString(),
       };
       return db.collection("job-logs").add(logBody).then(function(){
@@ -2582,7 +2603,8 @@
       var editJobId = f.getAttribute("data-job-id");
       var patch = {
         date: date, hours: hours, timeRange: timeRange, jobDescription: jobDescription, materials: materials, completed: completed, alsoOnsite: alsoOnsite,
-        estimatedReturn: completed ? "" : estimatedReturn, remainingWork: completed ? "" : remainingWork,
+        estimatedReturn: completed ? "" : estimatedReturn, returnUnsure: completed ? false : returnUnsure,
+        remainingWork: completed ? "" : remainingWork,
         editedBy: state.session.name, editedAt: new Date().toISOString(),
       };
       p = db.collection("job-logs").doc(editLogId).update(patch).then(function(){ return recomputeJobOpen(editJobId); });
@@ -2600,7 +2622,7 @@
         sendInstantJobEmail({
           isNew: mode === "new", venue: emailVenue, jobDescription: jobDescription,
           date: date, hours: hours, completed: completed, materials: materials,
-          estimatedReturn: estimatedReturn, remainingWork: remainingWork,
+          estimatedReturn: estimatedReturn, returnUnsure: returnUnsure, remainingWork: remainingWork,
           employees: employees, submittedBy: state.session.name,
         });
       }
