@@ -1175,10 +1175,6 @@
       html += '<button type="button" class="btn btn-ghost btn-sm" data-email-job="'+esc(j.id)+'">Email</button>';
     }
     if (admin){
-      // For pasting straight into the Word invoice / ALH's upload system —
-      // venue, description, every visit, materials, hours and price, as
-      // plain text ready to paste rather than selecting it off the screen.
-      html += '<button type="button" class="btn btn-ghost btn-sm" data-copy-job="'+esc(j.id)+'">Copy for invoice</button>';
       html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
       html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-merge" data-job-id="'+esc(j.id)+'">Merge into another job&hellip;</button>';
     }
@@ -1876,66 +1872,6 @@
     });
   }
 
-  // Plain text, ready to paste straight into a Word invoice or ALH's upload
-  // system: venue/client/reference numbers, the description, every visit
-  // (so an ongoing multi-week job reads as one clear list of what was done),
-  // Mirrors Grace's actual Word invoice layout (client, venue, VTASK/PO
-  // reference line, description, then Amount/GST/Total) so this pastes
-  // straight into the template instead of needing reshaping. GST is always
-  // worked out at 10% from the entered amount (treated as excl. GST) —
-  // that's the exact "$ .00" spot she's had come out blank by hand.
-  var GST_RATE = 0.10;
-  function buildJobInvoiceText(j){
-    var logs = jobLogsFor(j.id).slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
-    var lines = [];
-
-    if (j.client) { lines.push(j.client); lines.push(""); }
-    lines.push(j.venue || "");
-
-    var refParts = [];
-    if (j.vtask) refParts.push("VTASK" + j.vtask);
-    if (j.poNumber) refParts.push((j.client ? j.client + " " : "") + "Purchase Order #" + j.poNumber);
-    if (refParts.length) lines.push(refParts.join(" "));
-    lines.push("");
-
-    if (j.jobDescription){ lines.push("Description:"); lines.push(j.jobDescription); }
-
-    // Only for a job that ran across more than one visit — a single-visit
-    // job (like the roof clean this was built from) needs nothing extra,
-    // but an ongoing multi-week job still needs each visit accounted for.
-    if (logs.length > 1){
-      lines.push("");
-      lines.push("Work performed, by visit:");
-      logs.forEach(function(l){
-        var hrs = (l.hours!=null && l.hours!=="") ? l.hours+"h" : "";
-        var bit = fmtDay(l.date) + (hrs ? " — " + hrs : "");
-        if (l.jobDescription && l.jobDescription !== j.jobDescription) bit += ": " + l.jobDescription;
-        lines.push("- " + bit);
-      });
-    }
-    lines.push("");
-
-    if (j.invoiceAmount != null && j.invoiceAmount !== ""){
-      var amount = Number(j.invoiceAmount);
-      var gst = Math.round(amount * GST_RATE * 100) / 100;
-      var total = Math.round((amount + gst) * 100) / 100;
-      lines.push("Amount $" + amount.toFixed(2));
-      lines.push("GST Payable $" + gst.toFixed(2));
-      lines.push("Total Amount Payable Including GST $" + total.toFixed(2));
-    }
-
-    return lines.join("\n");
-  }
-
-  function copyJobForInvoice(jobId){
-    var j = state.jobs.filter(function(x){ return x.id===jobId; })[0];
-    if (!j) return;
-    var text = buildJobInvoiceText(j);
-    copyTextToClipboard(text, function(ok){
-      toast(ok ? "Copied — paste into your invoice" : "Couldn't copy automatically — select and copy manually");
-    });
-  }
-
   function copyTextToClipboard(text, cb){
     if (navigator.clipboard && navigator.clipboard.writeText){
       navigator.clipboard.writeText(text).then(function(){ cb(true); }).catch(function(){ fallbackCopyText(text, cb); });
@@ -2264,7 +2200,6 @@
     root.querySelectorAll("[data-copy-ts]").forEach(function(b){ b.addEventListener("click", function(){ copyTimesheetFor(b.getAttribute("data-copy-ts")); }); });
     root.querySelectorAll("[data-print-ts]").forEach(function(b){ b.addEventListener("click", function(){ printTimesheetFor(b.getAttribute("data-print-ts")); }); });
     root.querySelectorAll("[data-print-job]").forEach(function(b){ b.addEventListener("click", function(){ printJob(b.getAttribute("data-print-job")); }); });
-    root.querySelectorAll("[data-copy-job]").forEach(function(b){ b.addEventListener("click", function(){ copyJobForInvoice(b.getAttribute("data-copy-job")); }); });
 
     root.querySelectorAll("[data-bycrew-emp]").forEach(function(b){ b.addEventListener("click", function(){
       var name = b.getAttribute("data-bycrew-emp");
