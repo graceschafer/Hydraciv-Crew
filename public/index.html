@@ -393,6 +393,14 @@
   }
   function statusLabel(s){ return {quoted:"Quoted","in-process":"In process",completed:"Completed",invoiced:"Invoiced"}[s] || "Quoted"; }
   function statusPillClass(s){ return {quoted:"pill-violet","in-process":"pill-accent",completed:"pill-success",invoiced:"pill-ink"}[s] || "pill-violet"; }
+  // Small "Completed / My part done / Follow-up" pill for one visit — shared
+  // by the timesheet views so a visit where the crew member's own part is
+  // done, but the job itself isn't, doesn't just read as a generic Follow-up.
+  function logStatusPill(l){
+    if (l.completed) return "";
+    if (l.crewDone) return ' &middot; <span class="pill" style="padding:2px 7px; background:var(--amber-soft); color:var(--amber-ink);">My part done</span>';
+    return ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>';
+  }
 
   function toast(text){
     var el = document.createElement("div"); el.className = "toast"; el.textContent = text;
@@ -442,14 +450,18 @@
     if (!emailjsReady){ console.warn("EmailJS isn't configured yet — skipping instant job email. See SETUP-EMAIL.md."); return; }
     var statusHtml = j.completed
       ? '<span style="display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:#e3f3ea;color:#2f8f5b;">Completed</span>'
-      : '<span style="display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:#faedd6;color:#b5791c;">Follow-up needed</span>';
+      : (j.crewDone
+        ? '<span style="display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:#fdf0cc;color:#8a6100;">My part done</span>'
+        : '<span style="display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:#faedd6;color:#b5791c;">Follow-up needed</span>');
     var rows = [
       ["Venue", j.venue], ["Description", j.jobDescription], ["Date", fmtDay(j.date)],
       ["Hours", j.hours], ["Crew onsite", j.employees.join(", ")], ["Materials", j.materials || "—"],
     ];
+    if (j.othersBefore) rows.push(["Others been here before", "Yes"]);
     if (!j.completed){
       rows.push(["Est. return", j.returnUnsure ? "Not sure yet" : (j.estimatedReturn ? fmtShort(j.estimatedReturn) : "—")]);
       rows.push(["Still to do", j.remainingWork || "—"]);
+      if (j.crewDone) rows.push(["Who's going back", j.handoffUnsure ? "Not sure yet" : (j.handoffTo || "—")]);
     }
     var bodyHtml = '<div style="margin-bottom:14px">' + statusHtml + '</div><table style="width:100%;border-collapse:collapse;font-size:13.5px;">';
     rows.forEach(function(r){
@@ -681,8 +693,8 @@
     html += '<button class="btn btn-outline btn-block" style="margin-bottom:14px" data-action="view-timesheet">View your timesheet</button>';
 
     var mine = myJobs(me);
-    var notFinished = mine.filter(function(j){ return j.open !== false; });
-    var doneJobs = mine.filter(function(j){ return j.open === false; });
+    var notFinished = mine.filter(function(j){ return !j.myDone; });
+    var doneJobs = mine.filter(function(j){ return j.myDone; });
     var tab = state.crewJobsTab === "completed" ? "completed" : "open";
 
     html += '<div class="subtabs">' +
@@ -704,6 +716,10 @@
   }
 
   // All jobs this person has been on, one card per job (latest status), open/follow-up-needed first.
+  // "Done from their own point of view" is based on THEIR latest visit to the
+  // job (completed, or they flagged their part done), not the job's overall
+  // open/closed state — a job can still be open for whoever's picking it up
+  // next while no longer sitting under this person's own Not Finished list.
   function myJobs(me){
     var seenJobs = {}, mine = [];
     state.jobLogs.forEach(function(l){
@@ -712,10 +728,10 @@
       if (seenJobs[key]) return;
       seenJobs[key] = true;
       var job = state.jobs.filter(function(j){ return j.id === key; })[0];
-      if (job && !job.trashed && !job.mergedInto) mine.push(job);
+      if (job && !job.trashed && !job.mergedInto) mine.push(Object.assign({}, job, { myDone: !!(l.completed || l.crewDone) }));
     });
     mine.sort(function(a,b){
-      var aOpen = a.open !== false, bOpen = b.open !== false;
+      var aOpen = !a.myDone, bOpen = !b.myDone;
       if (aOpen !== bOpen) return aOpen ? -1 : 1;
       return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||"");
     });
@@ -737,6 +753,12 @@
     if (state.formMsg) html += '<div class="msg '+(state.formMsg.type==="error"?"msg-error":"msg-success")+'">'+esc(state.formMsg.text)+'</div>';
 
     html += '<form id="job-form" data-mode="'+opts.mode+'" '+(job?('data-job-id="'+esc(job.id)+'"'):'')+' '+(isEdit?('data-log-id="'+esc(log.id)+'"'):'')+'>';
+
+    var othersBeforeVal = isEdit ? !!log.othersBefore : false;
+    html += '<div class="field"><label>Has anyone besides yourself been to this job before?</label><div class="seg" data-seg="othersBefore">' +
+      '<button type="button" data-val="no" class="'+(!othersBeforeVal?"on":"")+'">No</button>' +
+      '<button type="button" data-val="yes" class="'+(othersBeforeVal?"on":"")+'">Yes</button>' +
+    '</div></div>';
 
     if (opts.mode === "new"){
       html += field("Venue / job site", '<div class="autocomplete-wrap"><input type="text" id="job-venue-input" name="venue" placeholder="e.g. 14 Marlow St — pump station" autocomplete="off" required>' +
@@ -765,11 +787,21 @@
 
     html += field("Materials used", '<textarea name="materials" placeholder="e.g. 2x 25mm ball valves, 10m copper pipe">'+(isEdit?esc(log.materials||""):"")+'</textarea>');
 
-    var completedVal = isEdit ? !!log.completed : true;
+    // Three states, not two: fully "Completed" closes the job for everyone;
+    // "Not finished" means the job (and this person's part in it) still has
+    // work left; "My part's done" is the middle case — the JOB isn't
+    // finished, but THIS crew member personally won't be going back to it,
+    // so it should drop off their own Not Finished list without marking the
+    // whole job closed for whoever picks it up next.
+    var jobStatusVal = "yes";
+    if (isEdit){ jobStatusVal = log.crewDone ? "mine" : (log.completed ? "yes" : "no"); }
     html += '<div class="field"><label>Job status</label><div class="seg" data-seg="completed">' +
-      '<button type="button" data-val="yes" class="'+(completedVal?"on":"")+'">Completed</button><button type="button" data-val="no" class="'+(!completedVal?"on":"")+'">Not finished</button></div></div>';
+      '<button type="button" data-val="yes" class="'+(jobStatusVal==="yes"?"on":"")+'">Completed</button>' +
+      '<button type="button" data-val="no" class="'+(jobStatusVal==="no"?"on":"")+'">Not finished</button>' +
+      '<button type="button" data-val="mine" class="'+(jobStatusVal==="mine"?"on":"")+'">My part&rsquo;s done</button>' +
+    '</div></div>';
 
-    html += '<div id="followup-fields" style="display:'+(completedVal?"none":"block")+'">';
+    html += '<div id="followup-fields" style="display:'+(jobStatusVal==="yes"?"none":"block")+'">';
     var returnUnsureVal = isEdit ? !!log.returnUnsure : false;
     html += '<div class="field"><label>Estimated return date</label>' +
       '<input type="date" id="estimated-return-input" name="estimatedReturn" value="'+esc(isEdit?(log.estimatedReturn||""):"")+'" '+(returnUnsureVal?"disabled":"")+'>' +
@@ -777,6 +809,16 @@
       '<input type="hidden" name="returnUnsure" value="'+(returnUnsureVal?"1":"")+'">' +
     '</div>';
     html += field("Work still to do", '<textarea name="remainingWork" placeholder="What\'s left to finish next visit">'+(isEdit?esc(log.remainingWork||""):"")+'</textarea>');
+
+    var handoffUnsureVal = isEdit ? !!log.handoffUnsure : false;
+    html += '<div id="handoff-fields" style="display:'+(jobStatusVal==="mine"?"block":"none")+'">';
+    html += '<div class="field"><label>Who else is going back?</label>' +
+      '<input type="text" id="handoff-input" name="handoffTo" value="'+(isEdit?esc(log.handoffTo||""):"")+'" placeholder="e.g. Charlotte" '+(handoffUnsureVal?"disabled":"")+'>' +
+      '<button type="button" id="handoff-unsure-btn" class="btn btn-outline btn-sm'+(handoffUnsureVal?" on":"")+'" style="margin-top:6px" data-on="'+(handoffUnsureVal?"1":"")+'">'+(handoffUnsureVal?"✓ Unsure":"Unsure")+'</button>' +
+      '<input type="hidden" name="handoffUnsure" value="'+(handoffUnsureVal?"1":"")+'">' +
+    '</div>';
+    html += '</div>';
+
     html += '</div>';
 
     html += '<button type="submit" class="btn btn-primary btn-block" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Sending…":(isEdit?"Save changes":"Submit job sheet"))+'</button>';
@@ -941,13 +983,18 @@
 
   function renderLogCard(l, opts){
     opts = opts || {};
-    var statusPill = l.completed ? '<span class="pill pill-success">Completed</span>' : '<span class="pill pill-warning">Follow-up needed</span>';
+    var statusPill = l.completed ? '<span class="pill pill-success">Completed</span>' :
+      (l.crewDone ? '<span class="pill" style="background:var(--amber-soft); color:var(--amber-ink);">My part done</span>' : '<span class="pill pill-warning">Follow-up needed</span>');
     var html = '<div class="log-card">';
     html += '<div class="log-top"><div><div class="log-venue">'+esc(l.venue)+'</div><div class="log-desc">'+esc(l.jobDescription||"")+'</div>';
     html += '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span>'+(l.timeRange?' ('+esc(l.timeRange)+')':'')+' &middot; '+esc((l.employees||[]).join(", "))+'</div></div>';
     html += '<div style="text-align:right">'+statusPill+'</div></div>';
     if (l.materials){ html += '<div class="log-body"><strong>Materials:</strong> '+esc(l.materials)+'</div>'; }
-    if (!l.completed){ html += '<div class="log-followup"><strong>Est. return:</strong> '+(l.returnUnsure?"Not sure yet":(l.estimatedReturn?fmtShort(l.estimatedReturn):"—"))+'<br><strong>Still to do:</strong> '+esc(l.remainingWork||"—")+'</div>'; }
+    if (!l.completed){
+      html += '<div class="log-followup"><strong>Est. return:</strong> '+(l.returnUnsure?"Not sure yet":(l.estimatedReturn?fmtShort(l.estimatedReturn):"—"))+'<br><strong>Still to do:</strong> '+esc(l.remainingWork||"—");
+      if (l.crewDone) html += '<br><strong>Who\'s going back:</strong> '+(l.handoffUnsure?"Not sure yet":esc(l.handoffTo||"—"));
+      html += '</div>';
+    }
     html += '<div class="log-foot"><span class="hint">logged by '+esc(l.submittedBy||"")+' &middot; '+fmtTime(l.submittedAt)+'</span>';
     if (opts.editable){ html += '<button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" data-edit-log="'+esc(l.id)+'">Edit</button>'; }
     html += '</div>';
@@ -1261,11 +1308,13 @@
           var canChange = admin || isInCurrentWeek(l.date);
           html += '<div style="margin-top:4px;'+(idx>0?' padding-top:6px; border-top:1px dashed var(--line);':'')+'">' +
             '<span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span>'+(l.timeRange?' <span class="hint">('+esc(l.timeRange)+')</span>':'')+' &middot; '+esc(l.submittedBy||"")+
-            (l.completed ? ' &middot; <span class="pill pill-success" style="padding:2px 7px">Completed</span>' : ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>') +
+            (l.completed ? ' &middot; <span class="pill pill-success" style="padding:2px 7px">Completed</span>' :
+              (l.crewDone ? ' &middot; <span class="pill" style="padding:2px 7px; background:var(--amber-soft); color:var(--amber-ink);">My part done</span>' : ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>')) +
             (l.jobDescription ? '<br><span class="log-desc" style="margin-top:3px; display:inline-block;">'+esc(l.jobDescription)+'</span>' : '') +
             (l.materials ? '<br><span class="hint">Materials: '+esc(l.materials)+'</span>' : '') +
             (l.alsoOnsite ? '<br><span class="hint">Also onsite: '+esc(l.alsoOnsite)+'</span>' : '') +
-            (!l.completed && l.remainingWork ? '<br><span class="hint">Still to do: '+esc(l.remainingWork)+'</span>' : '');
+            (!l.completed && l.remainingWork ? '<br><span class="hint">Still to do: '+esc(l.remainingWork)+'</span>' : '') +
+            (l.crewDone ? '<br><span class="hint">Who\'s going back: '+(l.handoffUnsure?"Not sure yet":esc(l.handoffTo||"—"))+'</span>' : '');
           if (canChange){
             if (state.trashConfirmLogId === l.id){
               html += '<div class="msg msg-error" style="margin-top:6px">Delete this entry? ' + (admin ? 'It\'ll move to the Trash tab, restorable any time.' : 'If that\'s a mistake, ask a manager to restore it.') + '</div>' +
@@ -1822,7 +1871,7 @@
       html += '<div class="timeline" style="margin-top:12px">' + logs.map(function(l){
         var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
         return '<div class="timeline-item"><strong>'+fmtDay(l.date)+'</strong> &middot; '+esc(l.venue||"")+' &middot; <span class="mono">'+hrs+'h</span>' +
-          (l.isLeave ? ' &middot; <span class="pill pill-accent" style="padding:2px 7px">Leave</span>' : (!l.completed ? ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>' : '')) +
+          (l.isLeave ? ' &middot; <span class="pill pill-accent" style="padding:2px 7px">Leave</span>' : logStatusPill(l)) +
         '</div>';
       }).join("") + '</div>';
     }
@@ -1858,7 +1907,7 @@
       html += '<div class="timeline" style="margin-top:12px">' + logs.map(function(l){
         var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
         return '<div class="timeline-item"><strong>'+fmtDay(l.date)+'</strong> &middot; '+esc(l.venue||"")+' &middot; <span class="mono">'+hrs+'h</span>' +
-          (l.isLeave ? ' &middot; <span class="pill pill-accent" style="padding:2px 7px">Leave</span>'+(isAdmin()?' <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px" data-edit-leave="'+esc(l.id)+'">Edit</button>':'') : (!l.completed ? ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>' : '')) +
+          (l.isLeave ? ' &middot; <span class="pill pill-accent" style="padding:2px 7px">Leave</span>'+(isAdmin()?' <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px" data-edit-leave="'+esc(l.id)+'">Edit</button>':'') : logStatusPill(l)) +
         '</div>';
       }).join("") + '</div>';
       html += '</div>';
@@ -2236,8 +2285,11 @@
           seg.querySelectorAll("button").forEach(function(x){ x.classList.remove("on"); });
           b.classList.add("on");
           if (name === "completed"){
+            var val = b.getAttribute("data-val");
             var ff = document.getElementById("followup-fields");
-            if (ff) ff.style.display = (b.getAttribute("data-val")==="no") ? "block" : "none";
+            if (ff) ff.style.display = (val==="yes") ? "none" : "block";
+            var hf = document.getElementById("handoff-fields");
+            if (hf) hf.style.display = (val==="mine") ? "block" : "none";
           }
           if (name === "crewRole"){ state.crewRole = b.getAttribute("data-val"); }
           if (name === "jobsFilter"){ state.jobsStatusFilter = b.getAttribute("data-val"); render(); }
@@ -2259,6 +2311,20 @@
       returnUnsureBtn.setAttribute("data-on", nowUnsure ? "1" : "");
       returnUnsureBtn.classList.toggle("on", nowUnsure);
       returnUnsureBtn.textContent = nowUnsure ? "✓ Not sure yet" : "Not sure yet";
+      if (input){ input.disabled = nowUnsure; if (nowUnsure) input.value = ""; }
+      if (hidden) hidden.value = nowUnsure ? "1" : "";
+    });
+
+    // Same "Unsure" pattern for who's picking the job back up, shown only
+    // when "My part's done" is selected above.
+    var handoffUnsureBtn = document.getElementById("handoff-unsure-btn");
+    if (handoffUnsureBtn) handoffUnsureBtn.addEventListener("click", function(){
+      var input = document.getElementById("handoff-input");
+      var hidden = jobForm ? jobForm.querySelector('input[name="handoffUnsure"]') : null;
+      var nowUnsure = handoffUnsureBtn.getAttribute("data-on") !== "1";
+      handoffUnsureBtn.setAttribute("data-on", nowUnsure ? "1" : "");
+      handoffUnsureBtn.classList.toggle("on", nowUnsure);
+      handoffUnsureBtn.textContent = nowUnsure ? "✓ Unsure" : "Unsure";
       if (input){ input.disabled = nowUnsure; if (nowUnsure) input.value = ""; }
       if (hidden) hidden.value = nowUnsure ? "1" : "";
     });
@@ -2550,13 +2616,20 @@
     var date = f.date.value;
     var hours = f.hours.value.trim();
     var timeRange = f.timeRange ? f.timeRange.value.trim() : "";
-    var completed = root.querySelector('#job-form [data-seg="completed"] .on').getAttribute("data-val") === "yes";
+    var jobStatusOn = root.querySelector('#job-form [data-seg="completed"] .on');
+    var jobStatusVal = jobStatusOn ? jobStatusOn.getAttribute("data-val") : "no";
+    var completed = jobStatusVal === "yes";
+    var crewDone = jobStatusVal === "mine";
+    var othersOn = root.querySelector('#job-form [data-seg="othersBefore"] .on');
+    var othersBefore = othersOn ? othersOn.getAttribute("data-val") === "yes" : false;
     var employees = [state.session.name];
     var alsoOnsite = f.alsoOnsite ? f.alsoOnsite.value.trim() : "";
     var materials = f.materials.value.trim();
     var estimatedReturn = f.estimatedReturn ? f.estimatedReturn.value : "";
     var returnUnsure = f.returnUnsure ? f.returnUnsure.value === "1" : false;
     var remainingWork = f.remainingWork ? f.remainingWork.value.trim() : "";
+    var handoffTo = f.handoffTo ? f.handoffTo.value.trim() : "";
+    var handoffUnsure = f.handoffUnsure ? f.handoffUnsure.value === "1" : false;
 
     if (!jobDescription || !date || !hours){
       state.formMsg = {type:"error", text:"Please fill in the job description, date and hours."};
@@ -2569,9 +2642,10 @@
     function afterLog(jobId, venue){
       var logBody = {
         jobId: jobId, venue: venue, date: date, hours: hours, timeRange: timeRange, jobDescription: jobDescription,
-        materials: materials, completed: completed, alsoOnsite: alsoOnsite,
+        materials: materials, completed: completed, alsoOnsite: alsoOnsite, othersBefore: othersBefore,
         estimatedReturn: completed ? "" : estimatedReturn, returnUnsure: completed ? false : returnUnsure,
         remainingWork: completed ? "" : remainingWork,
+        crewDone: crewDone, handoffTo: crewDone && !handoffUnsure ? handoffTo : "", handoffUnsure: crewDone ? handoffUnsure : false,
         employees: employees, submittedBy: state.session.name, submittedAt: new Date().toISOString(),
       };
       return db.collection("job-logs").add(logBody).then(function(){
@@ -2602,9 +2676,10 @@
       var editLogId = f.getAttribute("data-log-id");
       var editJobId = f.getAttribute("data-job-id");
       var patch = {
-        date: date, hours: hours, timeRange: timeRange, jobDescription: jobDescription, materials: materials, completed: completed, alsoOnsite: alsoOnsite,
+        date: date, hours: hours, timeRange: timeRange, jobDescription: jobDescription, materials: materials, completed: completed, alsoOnsite: alsoOnsite, othersBefore: othersBefore,
         estimatedReturn: completed ? "" : estimatedReturn, returnUnsure: completed ? false : returnUnsure,
         remainingWork: completed ? "" : remainingWork,
+        crewDone: crewDone, handoffTo: crewDone && !handoffUnsure ? handoffTo : "", handoffUnsure: crewDone ? handoffUnsure : false,
         editedBy: state.session.name, editedAt: new Date().toISOString(),
       };
       p = db.collection("job-logs").doc(editLogId).update(patch).then(function(){ return recomputeJobOpen(editJobId); });
@@ -2621,8 +2696,9 @@
       if (mode === "new" || mode === "update"){
         sendInstantJobEmail({
           isNew: mode === "new", venue: emailVenue, jobDescription: jobDescription,
-          date: date, hours: hours, completed: completed, materials: materials,
+          date: date, hours: hours, completed: completed, materials: materials, othersBefore: othersBefore,
           estimatedReturn: estimatedReturn, returnUnsure: returnUnsure, remainingWork: remainingWork,
+          crewDone: crewDone, handoffTo: handoffTo, handoffUnsure: handoffUnsure,
           employees: employees, submittedBy: state.session.name,
         });
       }
