@@ -310,6 +310,7 @@
     crewJobsTab: "open",
     viewingJobId: null, jobActionsOpen: false,
     mergeSourceId: null, mergeQuery: "", mergeTargetCandidateId: null,
+    unmergeTargetId: null, unmergeSelected: [],
     trashConfirmJobId: null, trashConfirmLeaveId: null, trashConfirmLogId: null,
     syncError: false,
     isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false,
@@ -567,6 +568,8 @@
       html += renderLeaveEditView();
     } else if (state.mergeSourceId){
       html += renderMergePicker();
+    } else if (state.unmergeTargetId){
+      html += renderUnmergePicker();
     } else if (state.viewingJobId){
       html += renderJobDetailView();
     } else if (!isAdmin()){
@@ -1261,6 +1264,9 @@
         html += '<button type="button" class="btn btn-ghost btn-sm" data-copy-job="'+esc(j.id)+'">Copy for invoice</button>';
         html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
         html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-merge" data-job-id="'+esc(j.id)+'">Merge into another job&hellip;</button>';
+        if (j.isMerged){
+          html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-unmerge" data-job-id="'+esc(j.id)+'">Unmerge&hellip;</button>';
+        }
       }
       html += '</div>';
     }
@@ -1422,7 +1428,10 @@
     var batch = db.batch();
     var sourceLogs = state.jobLogs.filter(function(l){ return l.jobId === sourceId; });
     sourceLogs.forEach(function(l){
-      batch.update(db.collection("job-logs").doc(l.id), { jobId: targetId, venue: finalVenue });
+      // mergedFromJobId records which job each visit originally belonged to,
+      // so if this merge ever needs undoing, those specific visits can be
+      // found and moved back rather than guessed at.
+      batch.update(db.collection("job-logs").doc(l.id), { jobId: targetId, venue: finalVenue, mergedFromJobId: sourceId });
     });
     if (finalVenue !== target.venue){
       var targetLogs = state.jobLogs.filter(function(l){ return l.jobId === targetId; });
@@ -1447,6 +1456,98 @@
       state.viewingJobId = targetId;
       render();
     }).catch(function(){ toast("Couldn't merge those jobs — try again."); });
+  }
+
+  // Every job currently merged into this target — a target can absorb more
+  // than one merge over time, so this can come back with several.
+  function mergeSourcesFor(targetId){
+    return state.jobs.filter(function(x){ return x.mergedInto === targetId && !x.trashed; });
+  }
+
+  function renderUnmergePicker(){
+    var target = state.jobs.filter(function(x){ return x.id === state.unmergeTargetId; })[0];
+    var backBtn = '<button type="button" class="btn btn-ghost" data-action="cancel-unmerge" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    if (!target){ state.unmergeTargetId = null; return renderJobDetailView(); }
+
+    var sources = mergeSourcesFor(target.id);
+    var html = '<div class="card">';
+    html += backBtn;
+    html += '<div class="section-title">Unmerge from &ldquo;'+esc(target.venue)+'&rdquo;</div>';
+
+    if (sources.length === 0){
+      html += '<p class="empty-note">Nothing merged into this job anymore.</p>';
+      html += '</div>';
+      return html;
+    }
+
+    html += '<p class="section-sub">'+(sources.length > 1 ? "This job has more than one job merged into it — pick which one(s) to split back out." : 'Pick "'+esc(sources[0].venue)+'" below to split it back out as its own job.')+'</p>';
+    html += '</div>';
+
+    html += '<div class="card">';
+    sources.forEach(function(s){
+      var taggedCount = state.jobLogs.filter(function(l){ return l.jobId === target.id && l.mergedFromJobId === s.id; }).length;
+      var checked = state.unmergeSelected.indexOf(s.id) !== -1;
+      html += '<label class="job-card" style="display:block; cursor:pointer;">';
+      html += '<div class="job-head"><div>';
+      html += '<div><input type="checkbox" data-unmerge-pick="'+esc(s.id)+'" '+(checked?"checked":"")+' style="margin-right:8px;"><span class="log-venue" style="font-size:15px">'+esc(s.venue)+'</span></div>';
+      if (taggedCount > 0){
+        html += '<div class="hint" style="margin-top:4px">'+taggedCount+' visit'+(taggedCount===1?"":"s")+' will move back to it.</div>';
+      } else {
+        html += '<div class="hint" style="margin-top:4px; color:#b3261e;">This was merged before we started tracking which visits belong to it — unmerging restores &ldquo;'+esc(s.venue)+'&rdquo; as its own job, but its past visits stay on &ldquo;'+esc(target.venue)+'&rdquo;. You can move individual visits by editing them.</div>';
+      }
+      html += '</div></div>';
+      html += '</label>';
+    });
+    html += '<div style="display:flex; gap:10px; margin-top:12px;">';
+    html += '<button type="button" class="btn btn-primary" data-action="confirm-unmerge" '+(state.unmergeSelected.length?"":"disabled")+'>Unmerge selected</button>';
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  function performUnmerge(targetId, sourceIds){
+    if (!db || !targetId || !sourceIds || !sourceIds.length) return;
+    var target = state.jobs.filter(function(x){ return x.id === targetId; })[0];
+    if (!target) return;
+
+    var batch = db.batch();
+    var now = new Date().toISOString();
+    sourceIds.forEach(function(sourceId){
+      var source = state.jobs.filter(function(x){ return x.id === sourceId; })[0];
+      if (!source) return;
+      var taggedLogs = state.jobLogs.filter(function(l){ return l.jobId === targetId && l.mergedFromJobId === sourceId; });
+      taggedLogs.forEach(function(l){
+        batch.update(db.collection("job-logs").doc(l.id), {
+          jobId: sourceId,
+          venue: source.venue,
+          mergedFromJobId: firebase.firestore.FieldValue.delete()
+        });
+      });
+      batch.update(db.collection("jobs").doc(sourceId), {
+        mergedInto: firebase.firestore.FieldValue.delete(),
+        open: true,
+        lastUpdatedAt: now
+      });
+    });
+
+    // Once every source is split back out, the target no longer counts as a
+    // combined job — unless something else is still merged into it.
+    var stillMerged = mergeSourcesFor(targetId).filter(function(s){ return sourceIds.indexOf(s.id) === -1; }).length > 0;
+    if (!stillMerged){
+      batch.update(db.collection("jobs").doc(targetId), { isMerged: false, lastUpdatedAt: now });
+    } else {
+      batch.update(db.collection("jobs").doc(targetId), { lastUpdatedAt: now });
+    }
+
+    batch.commit().then(function(){
+      toast(sourceIds.length > 1 ? "Unmerged those jobs" : "Unmerged that job");
+      state.unmergeTargetId = null; state.unmergeSelected = [];
+      var jobsToRecompute = sourceIds.concat([targetId]);
+      Promise.all(jobsToRecompute.map(function(id){ return recomputeJobOpen(id); })).then(function(){
+        state.viewingJobId = targetId;
+        render();
+      });
+    }).catch(function(){ toast("Couldn't unmerge — try again."); });
   }
 
   // Re-derives a job's open/closed state from whichever of its (non-deleted)
@@ -2434,6 +2535,29 @@
         if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
       });
     }
+
+    var startUnmergeBtn = root.querySelector('[data-action="start-unmerge"]');
+    if (startUnmergeBtn) startUnmergeBtn.addEventListener("click", function(){
+      state.unmergeTargetId = startUnmergeBtn.getAttribute("data-job-id");
+      state.unmergeSelected = [];
+      render();
+    });
+    var cancelUnmergeBtn = root.querySelector('[data-action="cancel-unmerge"]');
+    if (cancelUnmergeBtn) cancelUnmergeBtn.addEventListener("click", function(){
+      state.unmergeTargetId = null; state.unmergeSelected = [];
+      render();
+    });
+    root.querySelectorAll("[data-unmerge-pick]").forEach(function(cb){ cb.addEventListener("change", function(){
+      var id = cb.getAttribute("data-unmerge-pick");
+      var idx = state.unmergeSelected.indexOf(id);
+      if (cb.checked && idx === -1) state.unmergeSelected.push(id);
+      if (!cb.checked && idx !== -1) state.unmergeSelected.splice(idx,1);
+      render();
+    }); });
+    var confirmUnmergeBtn = root.querySelector('[data-action="confirm-unmerge"]');
+    if (confirmUnmergeBtn) confirmUnmergeBtn.addEventListener("click", function(){
+      performUnmerge(state.unmergeTargetId, state.unmergeSelected.slice());
+    });
 
     var askTrashBtn = root.querySelector('[data-action="ask-trash-job"]');
     if (askTrashBtn) askTrashBtn.addEventListener("click", function(){
