@@ -199,6 +199,26 @@
   .stat-tile .num{font-family:"Big Shoulders Display"; font-size:28px; font-weight:800; line-height:1;}
   .stat-tile .label{font-size:11.5px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.04em; margin-top:4px;}
 
+  /* Compact job-detail visit summary — a slim strip instead of the old big
+     grey stat-grid card, used only on the job detail view. */
+  .stat-strip{display:flex; border:1px solid var(--line); border-radius:10px; overflow:hidden;}
+  .stat-strip .cell{flex:1; padding:9px 10px; text-align:center; border-right:1px solid var(--line);}
+  .stat-strip .cell:last-child{border-right:none;}
+  .stat-strip .num{font-family:"Big Shoulders Display"; font-size:18px; font-weight:800; line-height:1;}
+  .stat-strip .label{font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-faint); margin-top:3px;}
+
+  /* One compact line per logged visit, with a status dot instead of a
+     repeated pill on every row, and a kebab that reveals edit/delete
+     instead of showing them all the time. */
+  .visit-row{padding:7px 0; border-top:1px dashed var(--line);}
+  .visit-row:first-child{border-top:none;}
+  .visit-row .vr-line1{display:flex; align-items:flex-start; gap:8px;}
+  .visit-row .vr-dot{width:8px; height:8px; border-radius:50%; margin-top:5px; flex:none;}
+  .visit-row .vr-body{flex:1; min-width:0; font-size:13px;}
+  .visit-row .vr-sub{font-size:12px; color:var(--ink-faint); margin-top:2px;}
+  .visit-row .vr-kebab{background:none; border:none; color:var(--ink-faint); font-size:16px; cursor:pointer; padding:0 4px; flex:none; line-height:1;}
+  .visit-row .vr-actions{margin-top:6px; padding-left:16px; display:flex; gap:14px;}
+
   .bar-row{display:grid; grid-template-columns:110px 1fr 52px; align-items:center; gap:10px; margin-bottom:8px;}
   .bar-name{font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .bar-track{background:var(--surface-2); border-radius:6px; height:10px; overflow:hidden;}
@@ -312,6 +332,7 @@
     mergeSourceId: null, mergeQuery: "", mergeTargetCandidateId: null,
     unmergeTargetId: null, unmergeSelected: [],
     trashConfirmJobId: null, trashConfirmLeaveId: null, trashConfirmLogId: null,
+    openLogActionsId: null,
     syncError: false,
     isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false,
     notifyEmail: "", notifyEmailMsg: null,
@@ -789,6 +810,15 @@
     html += field("Anyone else onsite? (optional)", '<input type="text" name="alsoOnsite" value="'+(isEdit?esc(log.alsoOnsite||""):"")+'" placeholder="e.g. Charlotte, Bob">');
 
     html += field("Materials used", '<textarea name="materials" placeholder="e.g. 2x 25mm ball valves, 10m copper pipe">'+(isEdit?esc(log.materials||""):"")+'</textarea>');
+    // Management-only — crew just note who supplied the materials (e.g.
+    // "Reece", "Pro"); Grace fills in what it actually cost once she has the
+    // docket, so this never blocks crew from submitting the job sheet.
+    if (isAdmin()){
+      html += '<div class="field"><label>Materials cost ($, optional)</label>' +
+        '<input type="text" inputmode="decimal" name="materialsCost" value="'+(isEdit && log.materialsCost!=null?esc(log.materialsCost):"")+'" placeholder="e.g. 84.50">' +
+        '<p class="hint" style="margin:4px 0 0">From the docket — leave blank until you have it.</p>' +
+      '</div>';
+    }
 
     // Three states, not two: fully "Completed" closes the job for everyone;
     // "Not finished" means the job (and this person's part in it) still has
@@ -1206,18 +1236,25 @@
     var html = '<div class="card">';
     html += backBtn;
 
-    html += '<div class="job-head"><div><div class="log-venue" style="font-size:20px">'+esc(j.venue)+'</div>';
-    if (j.assignedEmployees && j.assignedEmployees.length){
-      html += '<div class="chips" style="margin-top:8px">'+j.assignedEmployees.map(function(n){return '<span class="pill pill-neutral">'+esc(n)+'</span>';}).join("")+'</div>';
-    }
+    // ---- Header: venue + one quiet meta line on the left; status + price
+    // grouped together on the right, instead of a bigger name block, a
+    // separate row of name chips, and status/price stacked far away from
+    // each other. ----
+    html += '<div class="job-head"><div><div class="log-venue" style="font-size:18px">'+esc(j.venue)+'</div>';
+    var metaBits = [];
+    if (j.assignedEmployees && j.assignedEmployees.length) metaBits.push(esc(j.assignedEmployees.join(", ")));
+    if (admin && j.vtask) metaBits.push('VTASK '+esc(j.vtask));
+    if (admin && j.poNumber) metaBits.push('PO '+esc(j.poNumber));
+    if (j.client) metaBits.push(esc(j.client));
+    if (metaBits.length) html += '<div class="log-meta" style="margin-top:4px">'+metaBits.join(' &middot; ')+'</div>';
     html += '</div>';
     var priceBadge = "";
     if (admin){
       priceBadge = (j.invoiceAmount != null && j.invoiceAmount !== "")
-        ? '<button type="button" class="pill pill-success mono" style="border:none; cursor:pointer;" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">$'+Number(j.invoiceAmount).toFixed(2)+'</button>'
-        : '<button type="button" class="pill pill-neutral" style="border:1px dashed var(--line); background:transparent; cursor:pointer;" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">+ Add price</button>';
+        ? '<button type="button" class="mono" style="background:none; border:none; padding:0; cursor:pointer; font-weight:700; font-size:13px; color:var(--success);" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">$'+Number(j.invoiceAmount).toFixed(2)+'</button>'
+        : '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px; color:var(--ink-faint);" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">+ Add price</button>';
     }
-    html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">';
+    html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:5px;">';
     if (admin){
       html += '<select class="status-select" data-job-status-select="'+esc(j.id)+'">' +
         ["quoted","in-process","completed","invoiced"].map(function(s){ return '<option value="'+s+'" '+(j.status===s?"selected":"")+'>'+statusLabel(s)+'</option>'; }).join("") +
@@ -1227,12 +1264,7 @@
     }
     html += priceBadge + '</div></div>';
 
-    if (j.jobDescription) html += '<div class="log-desc" style="margin-top:10px; font-size:14.5px">'+esc(j.jobDescription)+'</div>';
-    var metaBits = [];
-    if (admin && j.vtask) metaBits.push('VTASK '+esc(j.vtask));
-    if (admin && j.poNumber) metaBits.push('PO '+esc(j.poNumber));
-    if (j.client) metaBits.push(esc(j.client));
-    if (metaBits.length) html += '<div class="log-meta" style="margin-top:6px">'+metaBits.join(' &middot; ')+'</div>';
+    if (j.jobDescription) html += '<div class="log-desc" style="margin-top:8px; font-size:14px">'+esc(j.jobDescription)+'</div>';
     if (admin && j.comments) html += '<div class="hint" style="margin-top:8px">Notes: '+esc(j.comments)+'</div>';
 
     // Only the actions used on most jobs, most of the time, sit in view by
@@ -1280,32 +1312,20 @@
       '</div>';
     }
 
-    // For a job that's dragged on across multiple visits — days, weeks, even
-    // months — the full visit-by-visit timeline below gets long fast. This
-    // summary sits above it as the "at a glance" version: total hours, how
-    // many visits, the date range, and every visit's materials pulled into
-    // one list, so nobody has to scroll the whole timeline just to add up
-    // hours or see what's been used.
+    // For a job that's dragged on across multiple visits, a slim strip
+    // replaces the old big grey "Job summary" card — same at-a-glance
+    // totals, a fraction of the space. Materials no longer get a separate
+    // summary list either, since each visit below already shows its own —
+    // the strip's Materials cell is management-only and just totals what's
+    // been entered against the docket so far.
     if (logs.length > 1){
-      var summaryDates = logs.map(function(l){ return l.date; }).filter(Boolean).slice().sort();
-      var firstVisitDate = summaryDates[0], lastVisitDate = summaryDates[summaryDates.length-1];
       var summaryHours = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
-      var materialsRows = logs.slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); })
-        .filter(function(l){ return l.materials; });
-
-      html += '<div class="card" style="margin-top:14px; background:var(--surface-2);">';
-      html += '<div class="section-title" style="font-size:16px">Job summary</div>';
-      html += '<p class="section-sub" style="margin-bottom:12px">'+logs.length+' visits logged so far.</p>';
-      html += '<div class="stat-grid">';
-      html += statTile(summaryHours.toFixed(1), "Total hours");
-      html += statTile(logs.length, "Visits logged");
-      html += statTile(fmtShort(firstVisitDate), "First visit");
-      html += (j.open === false) ? statTile(fmtShort(lastVisitDate), "Last visit") : statTile("Ongoing", "Status");
-      html += '</div>';
-      if (materialsRows.length){
-        html += '<div style="margin-top:14px"><div class="hint" style="text-transform:uppercase; letter-spacing:.04em; font-weight:600; margin-bottom:6px;">Materials used, by visit</div>';
-        html += materialsRows.map(function(l){ return '<div class="log-meta" style="margin-bottom:5px"><strong>'+fmtDay(l.date)+':</strong> '+esc(l.materials)+'</div>'; }).join("");
-        html += '</div>';
+      html += '<div class="stat-strip" style="margin-top:14px">';
+      html += '<div class="cell"><div class="num mono">'+summaryHours.toFixed(1)+'</div><div class="label">Hours</div></div>';
+      html += '<div class="cell"><div class="num mono">'+logs.length+'</div><div class="label">Visits</div></div>';
+      if (admin){
+        var materialsCostTotal = logs.reduce(function(s,l){ return s + (l.materialsCost!=null ? Number(l.materialsCost) : 0); }, 0);
+        html += '<div class="cell"><div class="num mono">$'+materialsCostTotal.toFixed(2)+'</div><div class="label">Materials</div></div>';
       }
       html += '</div>';
     }
@@ -1319,40 +1339,50 @@
         if (!byDate[l.date]){ byDate[l.date] = []; dateOrder.push(l.date); }
         byDate[l.date].push(l);
       });
-      html += '<div class="timeline">';
       dateOrder.forEach(function(d){
         var entries = byDate[d];
-        html += '<div class="timeline-item"><strong>'+fmtDay(d)+'</strong>';
-        entries.forEach(function(l, idx){
+        html += '<div style="margin-top:10px"><strong style="font-size:13px">'+fmtDay(d)+'</strong>';
+        entries.forEach(function(l){
           var canChange = admin || isInCurrentWeek(l.date);
-          html += '<div style="margin-top:4px;'+(idx>0?' padding-top:6px; border-top:1px dashed var(--line);':'')+'">' +
-            '<span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'</span>'+(l.timeRange?' <span class="hint">('+esc(l.timeRange)+')</span>':'')+' &middot; '+esc(l.submittedBy||"")+
-            (l.completed ? ' &middot; <span class="pill pill-success" style="padding:2px 7px">Completed</span>' :
-              (l.crewDone ? ' &middot; <span class="pill" style="padding:2px 7px; background:var(--amber-soft); color:var(--amber-ink);">My part done</span>' : ' &middot; <span class="pill pill-warning" style="padding:2px 7px">Follow-up</span>')) +
-            (l.jobDescription ? '<br><span class="log-desc" style="margin-top:3px; display:inline-block;">'+esc(l.jobDescription)+'</span>' : '') +
-            (l.materials ? '<br><span class="hint">Materials: '+esc(l.materials)+'</span>' : '') +
-            (l.alsoOnsite ? '<br><span class="hint">Also onsite: '+esc(l.alsoOnsite)+'</span>' : '') +
-            (!l.completed && l.remainingWork ? '<br><span class="hint">Still to do: '+esc(l.remainingWork)+'</span>' : '') +
-            (l.crewDone ? '<br><span class="hint">Who\'s going back: '+(l.handoffUnsure?"Not sure yet":esc(l.handoffTo||"—"))+'</span>' : '');
+          var dotColor = l.completed ? "var(--success)" : (l.crewDone ? "var(--amber)" : "var(--warning)");
+          var statusText = l.completed ? "Completed" : (l.crewDone ? "My part done" : "Follow-up");
+          html += '<div class="visit-row"><div class="vr-line1">';
+          html += '<span class="vr-dot" style="background:'+dotColor+'"></span>';
+          html += '<div class="vr-body">';
+          html += '<span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'h</span>'+(l.timeRange?' <span class="hint">('+esc(l.timeRange)+')</span>':'')+' &middot; '+esc(l.submittedBy||"")+' &middot; '+statusText;
+          if (l.jobDescription) html += '<div class="vr-sub">'+esc(l.jobDescription)+'</div>';
+          if (l.materials || (admin && l.materialsCost != null)){
+            var matLine = l.materials ? "Materials: "+esc(l.materials) : "Materials";
+            if (admin && l.materialsCost != null) matLine += ' &mdash; $'+Number(l.materialsCost).toFixed(2);
+            html += '<div class="vr-sub">'+matLine+'</div>';
+          }
+          if (l.alsoOnsite) html += '<div class="vr-sub">Also onsite: '+esc(l.alsoOnsite)+'</div>';
+          if (!l.completed && l.remainingWork) html += '<div class="vr-sub">Still to do: '+esc(l.remainingWork)+'</div>';
+          if (l.crewDone) html += '<div class="vr-sub">Who\'s going back: '+(l.handoffUnsure?"Not sure yet":esc(l.handoffTo||"—"))+'</div>';
+          if (!canChange) html += '<div class="vr-sub">From a previous work week &mdash; ask a manager to change or delete it.</div>';
+          html += '</div>';
           if (canChange){
+            html += '<button type="button" class="vr-kebab" data-toggle-log-actions="'+esc(l.id)+'">&#8942;</button>';
+          }
+          html += '</div>'; // vr-line1
+          if (canChange && state.openLogActionsId === l.id){
             if (state.trashConfirmLogId === l.id){
-              html += '<div class="msg msg-error" style="margin-top:6px">Delete this entry? ' + (admin ? 'It\'ll move to the Trash tab, restorable any time.' : 'If that\'s a mistake, ask a manager to restore it.') + '</div>' +
-                '<div style="display:flex; gap:8px; margin-top:6px;">' +
+              html += '<div class="msg msg-error" style="margin-top:6px; margin-left:16px">Delete this entry? ' + (admin ? 'It\'ll move to the Trash tab, restorable any time.' : 'If that\'s a mistake, ask a manager to restore it.') + '</div>' +
+                '<div style="display:flex; gap:8px; margin-top:6px; margin-left:16px;">' +
                 '<button type="button" class="btn btn-primary btn-sm" style="background:#b3261e; border-color:#b3261e;" data-confirm-trash-log="'+esc(l.id)+'">Yes, delete it</button>' +
                 '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-trash-log">Cancel</button>' +
               '</div>';
             } else {
-              html += '<br><button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0" data-edit-log="'+esc(l.id)+'">Edit this entry</button>' +
-                '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0; color:#b3261e; margin-left:8px" data-ask-trash-log="'+esc(l.id)+'">Delete</button>';
+              html += '<div class="vr-actions">' +
+                '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0" data-edit-log="'+esc(l.id)+'">Edit this entry</button>' +
+                '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0; color:#b3261e" data-ask-trash-log="'+esc(l.id)+'">Delete</button>' +
+              '</div>';
             }
-          } else {
-            html += '<br><span class="hint">From a previous work week — ask a manager to change or delete it.</span>';
           }
-          html += '</div>';
+          html += '</div>'; // visit-row
         });
         html += '</div>';
       });
-      html += '</div>';
     } else {
       html += '<p class="empty-note">No updates logged yet.</p>';
     }
@@ -2467,9 +2497,9 @@
     root.querySelectorAll("[data-job-status-select]").forEach(function(sel){
       sel.addEventListener("change", function(){ setJobStatus(sel.getAttribute("data-job-status-select"), sel.value); });
     });
-    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); state.jobActionsOpen = false; render(); }); });
+    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); state.jobActionsOpen = false; state.openLogActionsId = null; render(); }); });
     var closeJobDetailBtn = root.querySelector('[data-action="close-job-detail"]');
-    if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){ state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; render(); });
+    if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){ state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; render(); });
     var toggleJobActionsBtn = root.querySelector('[data-action="toggle-job-actions"]');
     if (toggleJobActionsBtn) toggleJobActionsBtn.addEventListener("click", function(){ state.jobActionsOpen = !state.jobActionsOpen; render(); });
     root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
@@ -2596,6 +2626,13 @@
       restoreLeave(b.getAttribute("data-restore-leave"));
     }); });
 
+    var toggleLogActionsBtn = root.querySelector('[data-toggle-log-actions]');
+    if (toggleLogActionsBtn) toggleLogActionsBtn.addEventListener("click", function(){
+      var id = toggleLogActionsBtn.getAttribute("data-toggle-log-actions");
+      state.openLogActionsId = (state.openLogActionsId === id) ? null : id;
+      state.trashConfirmLogId = null;
+      render();
+    });
     var askTrashLogBtn = root.querySelector('[data-ask-trash-log]');
     if (askTrashLogBtn) askTrashLogBtn.addEventListener("click", function(){
       state.trashConfirmLogId = askTrashLogBtn.getAttribute("data-ask-trash-log");
@@ -2764,6 +2801,17 @@
     var employees = [state.session.name];
     var alsoOnsite = f.alsoOnsite ? f.alsoOnsite.value.trim() : "";
     var materials = f.materials.value.trim();
+    // Only present in the form for management (see renderJobForm) — never
+    // read or written for a crew submission, so editing your own entry never
+    // wipes out a cost Grace already filled in.
+    var materialsCost = null;
+    if (f.materialsCost){
+      var materialsCostRaw = f.materialsCost.value.trim();
+      if (materialsCostRaw){
+        var mcNum = parseFloat(materialsCostRaw);
+        materialsCost = isNaN(mcNum) ? null : mcNum;
+      }
+    }
     // Estimated return / Work still to do only apply to "Not finished" — for
     // "Completed" or "My part's done" those fields are hidden in the form, so
     // ignore whatever's left over in them from an earlier status selection.
@@ -2790,6 +2838,7 @@
         crewDone: crewDone, handoffTo: crewDone && !handoffUnsure ? handoffTo : "", handoffUnsure: crewDone ? handoffUnsure : false,
         employees: employees, submittedBy: state.session.name, submittedAt: new Date().toISOString(),
       };
+      if (f.materialsCost) logBody.materialsCost = materialsCost;
       return db.collection("job-logs").add(logBody).then(function(){
         // Keep the job's assignedEmployees up to date with everyone who's actually
         // logged a visit to it (not just whoever created it) — arrayUnion so this
@@ -2824,6 +2873,7 @@
         crewDone: crewDone, handoffTo: crewDone && !handoffUnsure ? handoffTo : "", handoffUnsure: crewDone ? handoffUnsure : false,
         editedBy: state.session.name, editedAt: new Date().toISOString(),
       };
+      if (f.materialsCost) patch.materialsCost = materialsCost;
       p = db.collection("job-logs").doc(editLogId).update(patch).then(function(){ return recomputeJobOpen(editJobId); });
     } else {
       var jobId = f.getAttribute("data-job-id");
