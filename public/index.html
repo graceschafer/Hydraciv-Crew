@@ -1493,7 +1493,10 @@
         });
       }
       html += '<div class="seg" style="margin:14px 0" data-seg="jobsFilter">' +
-        filters.map(function(f){ return '<button type="button" data-val="'+f+'" class="'+(state.jobsStatusFilter===f?"on":"")+'">'+f.charAt(0).toUpperCase()+f.slice(1)+'</button>'; }).join("") +
+        filters.map(function(f){
+          var label = f === "closed" ? "Completed" : (f.charAt(0).toUpperCase()+f.slice(1));
+          return '<button type="button" data-val="'+f+'" class="'+(state.jobsStatusFilter===f?"on":"")+'">'+label+'</button>';
+        }).join("") +
       '</div>';
     }
 
