@@ -337,6 +337,7 @@
     isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false,
     notifyEmail: "", notifyEmailMsg: null,
     editingCrewId: null, crewFormError: "",
+    mergeNameConfirm: null, mergeNameBusy: false, mergeNameMsg: null,
     glossaryOpen: false,
     leaveLogs: [], editLeaveId: null, leaveType: "sick",
     subcontractorJobs: [], subJobBusy: false, subJobMsg: null, trashConfirmSubJobId: null,
@@ -2318,7 +2319,31 @@
           '</div></div>';
           html += '<p class="hint">Renaming won\'t change their name on jobs already logged — only new ones.</p>';
           html += '<div style="display:flex; gap:8px;"><button type="submit" class="btn btn-primary btn-sm">Save</button><button type="button" class="btn btn-ghost btn-sm" data-action="cancel-edit-crew">Cancel</button></div>';
-          html += '</form></div>';
+          html += '</form>';
+
+          // Clean-up for exactly the situation the hint above warns about —
+          // once a rename's already happened and old entries are stuck under
+          // the previous name, this pulls them onto the current one.
+          html += '<div style="margin-top:14px; padding-top:14px; border-top:1px dashed var(--line);">';
+          html += '<div style="font-weight:600; font-size:13px;">Fix an old name</div>';
+          html += '<p class="hint" style="margin:2px 0 8px">If jobs or leave got logged under a different spelling before a rename, type the old name here to pull those onto &ldquo;'+esc(c.name)+'&rdquo;.</p>';
+          html += '<div style="display:flex; gap:8px; flex-wrap:wrap;">';
+          html += '<input type="text" id="merge-name-old-'+esc(c.id)+'" placeholder="e.g. Charlotte Fry" style="flex:1; min-width:160px;">';
+          html += '<button type="button" class="btn btn-outline btn-sm" data-action="merge-crew-name" data-crew-id="'+esc(c.id)+'" '+(state.mergeNameBusy?"disabled":"")+'>Merge into &ldquo;'+esc(c.name)+'&rdquo;</button>';
+          html += '</div>';
+          if (state.mergeNameConfirm && state.mergeNameConfirm.crewId === c.id){
+            html += '<div class="msg msg-info" style="margin-top:8px">Move every job, visit and leave day logged under &ldquo;'+esc(state.mergeNameConfirm.oldName)+'&rdquo; onto &ldquo;'+esc(c.name)+'&rdquo;? This can\'t be undone.</div>';
+            html += '<div style="display:flex; gap:8px; margin-top:6px;">' +
+              '<button type="button" class="btn btn-primary btn-sm" data-action="confirm-merge-crew-name" '+(state.mergeNameBusy?"disabled":"")+'>'+(state.mergeNameBusy?"Merging…":"Yes, merge it")+'</button>' +
+              '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-merge-crew-name">Cancel</button>' +
+            '</div>';
+          }
+          if (state.mergeNameMsg && state.mergeNameMsg.crewId === c.id){
+            html += '<div class="msg '+(state.mergeNameMsg.type==="error"?"msg-error":"msg-success")+'" style="margin-top:8px">'+esc(state.mergeNameMsg.text)+'</div>';
+          }
+          html += '</div>';
+
+          html += '</div>';
           return;
         }
         var login = loginFor(c.id);
@@ -2484,6 +2509,51 @@
     var cancelEditCrewBtn = root.querySelector('[data-action="cancel-edit-crew"]');
     if (cancelEditCrewBtn) cancelEditCrewBtn.addEventListener("click", function(){ state.editingCrewId=null; state.crewFormError=""; render(); });
     root.querySelectorAll(".edit-crew-form").forEach(function(f){ f.addEventListener("submit", onSubmitEditCrew); });
+
+    var mergeCrewNameBtn = root.querySelector('[data-action="merge-crew-name"]');
+    if (mergeCrewNameBtn) mergeCrewNameBtn.addEventListener("click", function(){
+      var crewId = mergeCrewNameBtn.getAttribute("data-crew-id");
+      var input = document.getElementById("merge-name-old-"+crewId);
+      var oldName = input ? input.value.trim() : "";
+      var crew = state.crew.filter(function(c){ return c.id === crewId; })[0];
+      if (!crew) return;
+      if (!oldName){
+        state.mergeNameMsg = {crewId: crewId, type:"error", text:"Type the old name first."};
+        render(); return;
+      }
+      if (oldName === crew.name){
+        state.mergeNameMsg = {crewId: crewId, type:"error", text:"That's already their current name."};
+        render(); return;
+      }
+      state.mergeNameMsg = null;
+      state.mergeNameConfirm = {crewId: crewId, oldName: oldName};
+      render();
+    });
+    var cancelMergeCrewNameBtn = root.querySelector('[data-action="cancel-merge-crew-name"]');
+    if (cancelMergeCrewNameBtn) cancelMergeCrewNameBtn.addEventListener("click", function(){
+      state.mergeNameConfirm = null;
+      render();
+    });
+    var confirmMergeCrewNameBtn = root.querySelector('[data-action="confirm-merge-crew-name"]');
+    if (confirmMergeCrewNameBtn) confirmMergeCrewNameBtn.addEventListener("click", function(){
+      var conf = state.mergeNameConfirm;
+      if (!conf) return;
+      var crew = state.crew.filter(function(c){ return c.id === conf.crewId; })[0];
+      if (!crew) return;
+      state.mergeNameBusy = true; render();
+      mergeCrewName(conf.oldName, crew.name).then(function(count){
+        state.mergeNameBusy = false; state.mergeNameConfirm = null;
+        state.mergeNameMsg = {crewId: conf.crewId, type: count > 0 ? "success" : "error",
+          text: count > 0
+            ? ('Done — moved '+count+' record'+(count===1?"":"s")+' from "'+conf.oldName+'" onto "'+crew.name+'".')
+            : ('Nothing found logged under "'+conf.oldName+'".')};
+        render();
+      }).catch(function(){
+        state.mergeNameBusy = false;
+        state.mergeNameMsg = {crewId: conf.crewId, type:"error", text:"Something went wrong — try again."};
+        render();
+      });
+    });
 
     var toggleGlossaryBtn = root.querySelector('[data-action="toggle-glossary"]');
     if (toggleGlossaryBtn) toggleGlossaryBtn.addEventListener("click", function(){ state.glossaryOpen=!state.glossaryOpen; render(); });
@@ -2943,6 +3013,65 @@
     db.collection("crew").doc(id).update({name:name, email:email, role:role})
       .then(function(){ toast("Saved — heads up: jobs already logged under their old name won't update."); state.editingCrewId=null; render(); })
       .catch(function(){ toast("Couldn't save — manager access needed."); });
+  }
+
+  // Renaming a crew member (see onSubmitEditCrew above) never touches
+  // anything already logged under their old name — this is the actual
+  // clean-up for that: it finds every job visit, job assignment and leave
+  // day filed under oldName and moves it onto newName, so timesheets and
+  // job history read as one person again. Returns how many records changed.
+  function mergeCrewName(oldName, newName){
+    if (!db || !oldName || !newName || oldName === newName) return Promise.resolve(0);
+    return Promise.all([
+      db.collection("job-logs").where("submittedBy","==",oldName).get(),
+      db.collection("job-logs").where("editedBy","==",oldName).get(),
+      db.collection("job-logs").where("employees","array-contains",oldName).get(),
+      db.collection("leave-logs").where("employee","==",oldName).get(),
+      db.collection("jobs").where("assignedEmployees","array-contains",oldName).get(),
+      db.collection("jobs").where("createdBy","==",oldName).get(),
+    ]).then(function(snaps){
+      var submittedBySnap = snaps[0], editedBySnap = snaps[1], employeesSnap = snaps[2],
+          leaveSnap = snaps[3], assignedSnap = snaps[4], createdBySnap = snaps[5];
+
+      // Firestore refuses a batch with more than one write to the same
+      // document, and the same job-log can easily match more than one of
+      // the queries above (e.g. submittedBy AND employees both matching) —
+      // so every field change for a given document is merged into one
+      // patch here before anything is written.
+      var patchMap = {};
+      function addPatch(ref, patch){
+        var key = ref.path;
+        if (!patchMap[key]) patchMap[key] = {ref: ref, patch: {}};
+        Object.assign(patchMap[key].patch, patch);
+      }
+      submittedBySnap.forEach(function(d){ addPatch(d.ref, {submittedBy: newName}); });
+      editedBySnap.forEach(function(d){ addPatch(d.ref, {editedBy: newName}); });
+      employeesSnap.forEach(function(d){
+        var employees = (d.data().employees || []).map(function(n){ return n === oldName ? newName : n; });
+        addPatch(d.ref, {employees: employees});
+      });
+      leaveSnap.forEach(function(d){ addPatch(d.ref, {employee: newName}); });
+      assignedSnap.forEach(function(d){
+        var assigned = (d.data().assignedEmployees || []).map(function(n){ return n === oldName ? newName : n; });
+        addPatch(d.ref, {assignedEmployees: assigned});
+      });
+      createdBySnap.forEach(function(d){ addPatch(d.ref, {createdBy: newName}); });
+
+      var ops = Object.keys(patchMap).map(function(k){ return patchMap[k]; });
+      if (!ops.length) return 0;
+
+      // Batches cap at 500 writes — chunk well under that so this still
+      // works cleanly for a much bigger crew down the track.
+      var chunks = [];
+      for (var i=0; i<ops.length; i+=400){ chunks.push(ops.slice(i, i+400)); }
+      return chunks.reduce(function(chain, group){
+        return chain.then(function(){
+          var batch = db.batch();
+          group.forEach(function(o){ batch.update(o.ref, o.patch); });
+          return batch.commit();
+        });
+      }, Promise.resolve()).then(function(){ return ops.length; });
+    });
   }
 
   function toggleCrewActive(id){
