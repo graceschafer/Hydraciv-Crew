@@ -291,7 +291,6 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -335,7 +334,6 @@
     openLogActionsId: null,
     syncError: false,
     isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false,
-    notifyEmail: "", notifyEmailMsg: null,
     editingCrewId: null, crewFormError: "",
     mergeNameConfirm: null, mergeNameBusy: false, mergeNameMsg: null,
     glossaryOpen: false,
@@ -394,7 +392,7 @@
   function leaveHours(type){ return (LEAVE_TYPES[type] ? LEAVE_TYPES[type].hours : 0); }
 
   // Leave entries for one person in one week, reshaped to look like a job-log
-  // row (date/hours/venue/completed) so timesheet rendering, print, email and
+  // row (date/hours/venue/completed) so timesheet rendering, print and
   // copy can all treat a leave day exactly like a logged job without extra cases.
   function leaveEntriesFor(name, wk){
     return state.leaveLogs
@@ -430,133 +428,9 @@
     toastHost.appendChild(el); setTimeout(function(){ el.remove(); }, 2600);
   }
 
-  // ---------- EmailJS: instant "job logged" notification to the office ----------
-  // Fill these in from your EmailJS account (emailjs.com) — see SETUP-EMAIL.md at the repo root
-  // for the exact steps (create account, add an email service, create one template, get keys).
-  var EMAILJS_PUBLIC_KEY  = "2w3Xg83Y0sdVsT6WF";
-  var EMAILJS_SERVICE_ID  = "service_rt02lxn";
-  var EMAILJS_TEMPLATE_ID = "template_nglizx8";
-  // Fallback only — used until "settings/app".notifyEmail loads (or if it's
-  // never set). Whoever is actually managing the app can change where these
-  // emails go from the Crew tab, without needing a code change — see
-  // getNotifyEmail() / the "Notifications" card in renderCrewView().
-  var DEFAULT_NOTIFY_EMAIL = "graceschafer3@gmail.com";
-  function getNotifyEmail(){ return (state.notifyEmail || DEFAULT_NOTIFY_EMAIL); }
   // Shared by the "new job" client picker and management's "Edit job details"
   // client picker, so there's one list to keep in sync, not two.
   var CLIENT_OPTIONS = ["ALH","Pubco/Supreme","MRC/Pegasus","Black Rhino","Other","Unsure"];
-  var emailjsReady = false;
-  try{
-    if (window.emailjs && EMAILJS_PUBLIC_KEY.indexOf("YOUR_") !== 0){
-      emailjs.init({publicKey: EMAILJS_PUBLIC_KEY});
-      emailjsReady = true;
-    }
-  }catch(e){}
-
-  // Shared branded shell so instant emails look like the rest of Hydraciv's mail.
-  function brandedEmailShell(parts){
-    return (
-      '<div style="background:#eef2f2;padding:24px 12px;font-family:\'Segoe UI\',-apple-system,Roboto,sans-serif;color:#16222b;">' +
-        '<div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #ccd7da;border-radius:10px;overflow:hidden;">' +
-          '<div style="background:#123f5c;color:#eef6fb;padding:20px 24px;">' +
-            '<div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#9fcbe3;margin:0 0 6px;font-family:monospace;">Hydraciv &middot; Crew Portal</div>' +
-            parts.header +
-          '</div>' +
-          '<div style="padding:20px 24px;">' + parts.body + '</div>' +
-          '<div style="padding:14px 24px 18px;border-top:1px solid #e2e9eb;font-size:12px;color:#7d8d94;">Auto-generated from the Hydraciv Crew Portal.</div>' +
-        '</div>' +
-      '</div>'
-    );
-  }
-
-  function sendInstantJobEmail(j){
-    if (!emailjsReady){ console.warn("EmailJS isn't configured yet — skipping instant job email. See SETUP-EMAIL.md."); return; }
-    var statusHtml = j.completed
-      ? '<span style="display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:#e3f3ea;color:#2f8f5b;">Completed</span>'
-      : (j.crewDone
-        ? '<span style="display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:#fdf0cc;color:#8a6100;">My part done</span>'
-        : '<span style="display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:#faedd6;color:#b5791c;">Follow-up needed</span>');
-    var rows = [
-      ["Venue", j.venue], ["Description", j.jobDescription], ["Date", fmtDay(j.date)],
-      ["Hours", j.hours], ["Crew onsite", j.employees.join(", ")], ["Materials", j.materials || "—"],
-    ];
-    if (j.othersBefore) rows.push(["Others been here before", "Yes"]);
-    if (!j.completed){
-      rows.push(["Est. return", j.returnUnsure ? "Not sure yet" : (j.estimatedReturn ? fmtShort(j.estimatedReturn) : "—")]);
-      rows.push(["Still to do", j.remainingWork || "—"]);
-      if (j.crewDone) rows.push(["Who's going back", j.handoffUnsure ? "Not sure yet" : (j.handoffTo || "—")]);
-    }
-    var bodyHtml = '<div style="margin-bottom:14px">' + statusHtml + '</div><table style="width:100%;border-collapse:collapse;font-size:13.5px;">';
-    rows.forEach(function(r){
-      bodyHtml += '<tr><td style="padding:6px 10px 6px 0;color:#7d8d94;font-size:11px;text-transform:uppercase;letter-spacing:.04em;vertical-align:top;white-space:nowrap;">' + esc(r[0]) + '</td><td style="padding:6px 0;">' + esc(r[1]) + '</td></tr>';
-    });
-    bodyHtml += '</table>';
-
-    var subject = (j.isNew ? "New job logged — " : "Job update — ") + j.venue;
-    var headerHtml = '<h1 style="margin:0;font-size:22px;font-weight:800;color:#fff;">' + esc(j.isNew ? "New job logged" : "Job update") + '</h1>' +
-      '<p style="margin:6px 0 0;font-size:13px;color:#cfe6f4;">by ' + esc(j.submittedBy) + '</p>';
-
-    emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-      to_email: getNotifyEmail(),
-      cc_email: "",
-      subject: subject,
-      html_body: brandedEmailShell({header: headerHtml, body: bodyHtml}),
-    }).catch(function(err){ console.warn("Instant job email failed to send:", err); });
-  }
-
-  // ---------- Manual "email this to myself" — a job sheet or a weekly timesheet, on demand ----------
-  function emailJob(jobId){
-    var j = state.jobs.filter(function(x){ return x.id === jobId; })[0];
-    if (!j) return;
-    if (!emailjsReady){ toast("Email isn't set up yet."); return; }
-    var logs = jobLogsFor(j.id).slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
-    var rowsHtml = logs.map(function(l){
-      var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
-      if (l.timeRange) hrs += " (" + esc(l.timeRange) + ")";
-      var extraBits = [];
-      if (l.materials) extraBits.push("Materials: "+esc(l.materials));
-      if (l.alsoOnsite) extraBits.push("Also onsite: "+esc(l.alsoOnsite));
-      if (!l.completed && l.remainingWork) extraBits.push("Still to do: "+esc(l.remainingWork));
-      return '<tr><td style="padding:6px 10px 6px 0;color:#7d8d94;font-size:11px;text-transform:uppercase;letter-spacing:.04em;vertical-align:top;white-space:nowrap;">'+esc(fmtDay(l.date))+'</td>' +
-        '<td style="padding:6px 0;">'+esc(l.submittedBy||"")+' &middot; '+hrs+'h' +
-        (extraBits.length ? '<br><span style="color:#7d8d94;font-size:12px;">'+extraBits.join(" &middot; ")+'</span>' : '') +
-        '</td></tr>';
-    }).join("");
-    var metaLine = [j.client, j.vtask?("VTASK "+j.vtask):"", j.poNumber?("PO "+j.poNumber):""].filter(Boolean).map(esc).join(" &middot; ");
-    var bodyHtml = (metaLine ? '<p style="margin:0 0 10px;color:#55676f;font-size:13px;">'+metaLine+'</p>' : '') +
-      (j.jobDescription ? '<p style="margin:0 0 14px;">'+esc(j.jobDescription)+'</p>' : '') +
-      '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">' + (rowsHtml || '<tr><td style="padding:6px 0;color:#7d8d94;">No updates logged yet.</td></tr>') + '</table>';
-    var headerHtml = '<h1 style="margin:0;font-size:22px;font-weight:800;color:#fff;">'+esc(j.venue||"")+'</h1>' +
-      '<p style="margin:6px 0 0;font-size:13px;color:#cfe6f4;">Status: '+esc(statusLabel(j.status))+'</p>';
-    emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-      to_email: getNotifyEmail(), cc_email: "",
-      subject: "Job sheet — " + (j.venue||""),
-      html_body: brandedEmailShell({header: headerHtml, body: bodyHtml}),
-    }).then(function(){ toast("Emailed to " + getNotifyEmail()); }).catch(function(){ toast("Couldn't send that email — try again."); });
-  }
-
-  function emailTimesheetFor(name){
-    if (!emailjsReady){ toast("Email isn't set up yet."); return; }
-    var wk = weekBounds(state.tsWeekOffset);
-    var logs = weeklyEntriesFor(name, wk);
-    logs.sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
-    var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
-    var rowsHtml = logs.map(function(l){
-      var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
-      return '<tr><td style="padding:6px 10px 6px 0;color:#7d8d94;font-size:11px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">'+esc(fmtDay(l.date))+'</td>' +
-        '<td style="padding:6px 0;">'+esc(l.venue||"")+'</td>' +
-        '<td style="padding:6px 0;text-align:right;font-family:monospace;">'+hrs+'h</td></tr>';
-    }).join("");
-    var bodyHtml = '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">' + (rowsHtml || '<tr><td style="padding:6px 0;color:#7d8d94;">Nothing logged this week.</td></tr>') + '</table>' +
-      '<p style="text-align:right;font-weight:700;margin-top:14px;color:#123f5c;">Total: '+total.toFixed(1)+'h</p>';
-    var headerHtml = '<h1 style="margin:0;font-size:22px;font-weight:800;color:#fff;">'+esc(name)+' &mdash; Timesheet</h1>' +
-      '<p style="margin:6px 0 0;font-size:13px;color:#cfe6f4;">'+esc(fmtShort(wk.startStr))+' to '+esc(fmtShort(wk.endStr))+'</p>';
-    emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-      to_email: getNotifyEmail(), cc_email: "",
-      subject: name + "'s timesheet — " + fmtShort(wk.startStr) + " to " + fmtShort(wk.endStr),
-      html_body: brandedEmailShell({header: headerHtml, body: bodyHtml}),
-    }).then(function(){ toast("Emailed " + name + "'s timesheet"); }).catch(function(){ toast("Couldn't send that email — try again."); });
-  }
 
   function activeCrew(){ return state.crew.filter(function(c){ return c.active !== false; }); }
   function isAdmin(){ return !!(state.session && state.session.role === "admin"); }
@@ -1269,7 +1143,7 @@
     if (admin && j.comments) html += '<div class="hint" style="margin-top:8px">Notes: '+esc(j.comments)+'</div>';
 
     // Only the actions used on most jobs, most of the time, sit in view by
-    // default. Print/Email/Copy for invoice/Send to Drew/Merge are all real
+    // default. Print/Copy for invoice/Send to Drew/Merge are all real
     // and all stay one tap away — they're just office/paperwork actions you
     // reach for occasionally, not every time you open a job, so they're
     // tucked under "More actions" instead of competing for attention here.
@@ -1285,11 +1159,10 @@
 
     if (hasMoreActions && state.jobActionsOpen){
       html += '<div class="log-foot" style="margin-top:6px; padding-top:10px; border-top:1px dashed var(--line);">';
-      // Print/Email are office paperwork actions — once a job's done, a crew
-      // member looking back at it from their Completed tab doesn't need them.
+      // Print is an office paperwork action — once a job's done, a crew
+      // member looking back at it from their Completed tab doesn't need it.
       if (admin || j.open !== false){
         html += '<button type="button" class="btn btn-ghost btn-sm" data-print-job="'+esc(j.id)+'">Print</button>';
-        html += '<button type="button" class="btn btn-ghost btn-sm" data-email-job="'+esc(j.id)+'">Email</button>';
       }
       if (admin){
         // For pasting straight into the Word invoice / ALH's upload system —
@@ -1599,8 +1472,8 @@
 
   // Permanently deletes a job and every logged visit under it. Firestore's
   // rules only allow this once "allow delete" is turned on for jobs and
-  // job-logs (see firestore.rules) — see SETUP-EMAIL.md-style note in the
-  // repo, or just the message Grace was given, for how to publish that.
+  // job-logs (see firestore.rules) — see the message Grace was given for
+  // how to publish that.
   // Firestore's rules don't allow real deletes on jobs (on purpose — see
   // firestore.rules), so "delete" here is a soft trash: the job stays in
   // the database but drops out of every list (visibleJobs() excludes it),
@@ -2008,7 +1881,6 @@
       '<p class="section-sub" style="margin-bottom:0">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+' &middot; <span class="mono">'+total.toFixed(1)+'h</span></p>' +
       '<button type="button" class="btn btn-outline btn-sm" data-copy-ts="'+esc(me)+'">Copy timesheet</button>' +
       '<button type="button" class="btn btn-ghost btn-sm" data-print-ts="'+esc(me)+'">Print</button>' +
-      '<button type="button" class="btn btn-ghost btn-sm" data-email-ts="'+esc(me)+'">Email</button>' +
     '</div>';
     if (logs.length === 0){
       html += '<p class="empty-note" style="margin-top:12px">Nothing logged this week.</p>';
@@ -2029,7 +1901,7 @@
     var names = weekEmployeeNames(wk);
 
     var html = '<div class="card">';
-    html += '<div><div class="section-title">Timesheets</div><p class="section-sub" style="margin-bottom:0">One block per crew member for the week below — hit Copy, then paste into an email. Leave days (sick, annual, trade school, public holiday) show up here too at 7.6h, and leave without pay at 0h.</p></div>';
+    html += '<div><div class="section-title">Timesheets</div><p class="section-sub" style="margin-bottom:0">One block per crew member for the week below — hit Copy, then paste wherever you need it. Leave days (sick, annual, trade school, public holiday) show up here too at 7.6h, and leave without pay at 0h.</p></div>';
     html += '<div class="weeknav" style="margin-top:14px"><button data-ts-week="-1">&larr;</button><div class="label">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div><button data-ts-week="1">&rarr;</button></div>';
     html += '</div>';
 
@@ -2047,7 +1919,6 @@
         '<p class="section-sub" style="margin-bottom:0">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+' &middot; <span class="mono">'+total.toFixed(1)+'h</span></p></div>' +
         '<button type="button" class="btn btn-outline btn-sm" data-copy-ts="'+esc(name)+'">Copy timesheet</button>' +
         '<button type="button" class="btn btn-ghost btn-sm" data-print-ts="'+esc(name)+'">Print</button>' +
-        '<button type="button" class="btn btn-ghost btn-sm" data-email-ts="'+esc(name)+'">Email</button>' +
       '</div>';
       html += '<div class="timeline" style="margin-top:12px">' + logs.map(function(l){
         var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
@@ -2268,15 +2139,6 @@
 
   function renderCrewView(){
     var html = '<div class="card">';
-    html += '<div class="section-title">Notifications</div>';
-    html += '<p class="section-sub">"Email" buttons on a job or timesheet — and the automatic email sent whenever a job is logged — go to this address. Change it any time, e.g. when someone new takes over managing this app.</p>';
-    html += '<form id="notify-email-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">';
-    html += '<div style="flex:1; min-width:200px;">' + field("Send job/timesheet emails to", '<input type="email" name="notifyEmail" value="'+esc(getNotifyEmail())+'" required>') + '</div>';
-    html += '<button type="submit" class="btn btn-primary btn-sm">Save</button>';
-    html += '</form>';
-    html += '</div>';
-
-    html += '<div class="card">';
     html += '<div class="section-title">Backup</div>';
     html += '<p class="section-sub">Download every job, job update and leave day, plus the crew roster, as one file — for your own records, or if you ever need to hand this over. PINs aren\'t included.</p>';
     html += '<button type="button" class="btn btn-outline" data-action="export-data">Download a backup</button>';
@@ -2558,12 +2420,6 @@
     var toggleGlossaryBtn = root.querySelector('[data-action="toggle-glossary"]');
     if (toggleGlossaryBtn) toggleGlossaryBtn.addEventListener("click", function(){ state.glossaryOpen=!state.glossaryOpen; render(); });
 
-    var notifyEmailForm = document.getElementById("notify-email-form");
-    if (notifyEmailForm) notifyEmailForm.addEventListener("submit", function(e){
-      e.preventDefault();
-      saveNotifyEmail(e.target.notifyEmail.value);
-    });
-
     root.querySelectorAll("[data-job-status-select]").forEach(function(sel){
       sel.addEventListener("change", function(){ setJobStatus(sel.getAttribute("data-job-status-select"), sel.value); });
     });
@@ -2573,8 +2429,6 @@
     var toggleJobActionsBtn = root.querySelector('[data-action="toggle-job-actions"]');
     if (toggleJobActionsBtn) toggleJobActionsBtn.addEventListener("click", function(){ state.jobActionsOpen = !state.jobActionsOpen; render(); });
     root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
-    root.querySelectorAll("[data-email-job]").forEach(function(b){ b.addEventListener("click", function(){ emailJob(b.getAttribute("data-email-job")); }); });
-    root.querySelectorAll("[data-email-ts]").forEach(function(b){ b.addEventListener("click", function(){ emailTimesheetFor(b.getAttribute("data-email-ts")); }); });
 
     root.querySelectorAll("[data-ts-week]").forEach(function(b){ b.addEventListener("click", function(){ state.tsWeekOffset += parseInt(b.getAttribute("data-ts-week"),10); render(); }); });
     root.querySelectorAll("[data-copy-ts]").forEach(function(b){ b.addEventListener("click", function(){ copyTimesheetFor(b.getAttribute("data-copy-ts")); }); });
@@ -2921,11 +2775,9 @@
     }
 
     var p;
-    var emailVenue = "";
     if (mode === "new"){
       var venue = f.venue.value.trim();
       if (!venue){ state.formBusy=false; state.formMsg={type:"error", text:"Add the venue / job site."}; render(); return; }
-      emailVenue = venue;
       var clientSegOn = root.querySelector('#job-form [data-seg="client"] .on');
       var client = clientSegOn ? clientSegOn.getAttribute("data-val") : "";
       p = db.collection("jobs").add({
@@ -2948,22 +2800,12 @@
     } else {
       var jobId = f.getAttribute("data-job-id");
       var job = state.jobs.filter(function(j){return j.id===jobId;})[0];
-      emailVenue = job ? job.venue : "";
-      p = afterLog(jobId, emailVenue);
+      p = afterLog(jobId, job ? job.venue : "");
     }
 
     p.then(function(){
       state.formBusy = false; state.logView = "list"; state.updateJobId = null; state.editLogId = null;
       toast(mode === "edit" ? "Changes saved" : "Job sheet sent");
-      if (mode === "new" || mode === "update"){
-        sendInstantJobEmail({
-          isNew: mode === "new", venue: emailVenue, jobDescription: jobDescription,
-          date: date, hours: hours, completed: completed, materials: materials, othersBefore: othersBefore,
-          estimatedReturn: estimatedReturn, returnUnsure: returnUnsure, remainingWork: remainingWork,
-          crewDone: crewDone, handoffTo: handoffTo, handoffUnsure: handoffUnsure,
-          employees: employees, submittedBy: state.session.name,
-        });
-      }
       render();
     }).catch(function(err){
       state.formBusy = false;
@@ -3088,15 +2930,6 @@
       .catch(function(){ toast("Couldn't reset PIN."); });
   }
 
-  function saveNotifyEmail(email){
-    if (!db) return;
-    email = (email||"").trim();
-    if (!email){ toast("Enter an email address first."); return; }
-    db.collection("settings").doc("app").set({notifyEmail: email}, {merge:true})
-      .then(function(){ toast("Job and timesheet emails will now go to " + email); })
-      .catch(function(){ toast("Couldn't save that — try again."); });
-  }
-
   function setJobStatus(jobId, status){
     if (!db) return;
     db.collection("jobs").doc(jobId).update({status:status}).catch(function(){ toast("Couldn't update status."); });
@@ -3214,11 +3047,6 @@
         state.subcontractorJobs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         render();
       }, onListenerError);
-
-      db.collection("settings").doc("app").onSnapshot(function(doc){
-        state.notifyEmail = (doc.exists && doc.data().notifyEmail) ? doc.data().notifyEmail : "";
-        render();
-      }, function(){});
 
       render();
     }).catch(function(err){
