@@ -1468,22 +1468,31 @@
     });
   }
 
-  // Permanently deletes a job and every logged visit under it. Firestore's
-  // rules only allow this once "allow delete" is turned on for jobs and
-  // job-logs (see firestore.rules) — see the message Grace was given for
-  // how to publish that.
   // Firestore's rules don't allow real deletes on jobs (on purpose — see
   // firestore.rules), so "delete" here is a soft trash: the job stays in
   // the database but drops out of every list (visibleJobs() excludes it),
-  // and it can be restored from the Trash tab. Nothing about its logged
-  // visits changes — they still belong to it, they just aren't shown
-  // anywhere until it's restored.
+  // and it can be restored from the Trash tab.
+  // Trashing a job also trashes its own logged visits (job-logs) — otherwise
+  // the job disappears from every job list, but its hours silently keep
+  // counting on whoever logged them's weekly timesheet, which is exactly the
+  // "trashed the duplicate job but the hours are still on my timesheet" bug.
+  // Logs are tagged trashedWithJob so restoreJob only brings back the ones IT
+  // trashed — not a log someone had already deleted on its own beforehand.
   function trashJob(jobId){
     if (!db || !jobId) return;
     var j = state.jobs.filter(function(x){ return x.id===jobId; })[0];
     if (!j) return;
-    db.collection("jobs").doc(jobId).update({ trashed: true, trashedAt: new Date().toISOString() })
-      .then(function(){
+    var now = new Date().toISOString();
+    db.collection("job-logs").where("jobId","==",jobId).get().then(function(snap){
+      var batch = db.batch();
+      batch.update(db.collection("jobs").doc(jobId), { trashed: true, trashedAt: now });
+      snap.docs.forEach(function(d){
+        if (!d.data().trashed){
+          batch.update(d.ref, { trashed: true, trashedAt: now, trashedWithJob: true });
+        }
+      });
+      return batch.commit();
+    }).then(function(){
         toast("Moved " + (j.venue||"that job") + " to trash");
         state.trashConfirmJobId = null;
         state.viewingJobId = null;
@@ -1496,8 +1505,16 @@
     if (!db || !jobId) return;
     var j = state.jobs.filter(function(x){ return x.id===jobId; })[0];
     if (!j) return;
-    db.collection("jobs").doc(jobId).update({ trashed: false })
-      .then(function(){ toast("Restored " + (j.venue||"that job")); render(); })
+    db.collection("job-logs").where("jobId","==",jobId).get().then(function(snap){
+      var batch = db.batch();
+      batch.update(db.collection("jobs").doc(jobId), { trashed: false });
+      snap.docs.forEach(function(d){
+        if (d.data().trashedWithJob){
+          batch.update(d.ref, { trashed: false, trashedWithJob: false });
+        }
+      });
+      return batch.commit();
+    }).then(function(){ toast("Restored " + (j.venue||"that job")); render(); })
       .catch(function(){ toast("Couldn't restore that — try again."); });
   }
 
@@ -1812,7 +1829,11 @@
     trashed.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
     var trashedLeave = state.leaveLogs.filter(function(l){ return l.trashed; });
     trashedLeave.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
-    var trashedLogs = state.jobLogs.filter(function(l){ return l.trashed; });
+    // Logs trashed automatically along with their job (trashedWithJob) are left
+    // out here — that job's own "Restore" button above already covers them, and
+    // restoring one of them on its own here would leave it counting on a
+    // timesheet again while its job is still in the trash.
+    var trashedLogs = state.jobLogs.filter(function(l){ return l.trashed && !l.trashedWithJob; });
     trashedLogs.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
     var trashedSubJobs = state.subcontractorJobs.filter(function(s){ return s.trashed; });
     trashedSubJobs.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
