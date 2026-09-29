@@ -291,6 +291,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
 <script>
 (function(){
   "use strict";
@@ -299,6 +300,7 @@
   var root = document.getElementById("root");
   var toastHost = document.getElementById("toast-host");
   var db = null;
+  var storage = null;
   var dbStatus = "loading"; // loading | ready | unavailable
 
   // sessionStorage (not localStorage) on purpose — it clears itself when the
@@ -339,6 +341,10 @@
     glossaryOpen: false,
     leaveLogs: [], editLeaveId: null, leaveType: "sick",
     subcontractorJobs: [], subJobBusy: false, subJobMsg: null, trashConfirmSubJobId: null,
+    schedule: [],
+    schedulingJobId: null, scheduleFormBusy: false, scheduleFormMsg: null,
+    viewingScheduleId: null, trashConfirmScheduleId: null,
+    calendarWeekOffset: 0, myCalendarWeekOffset: 0,
   };
 
   function esc(s){
@@ -361,6 +367,15 @@
     return {startStr: dateToStr(mon), endStr: dateToStr(sun)};
   }
   function inRange(d,a,b){ return d>=a && d<=b; }
+  // The 7 date strings (Mon..Sun) for a given week offset — the day columns
+  // the calendar views are built from.
+  function weekDates(offset){
+    var wk = weekBounds(offset);
+    var mon = parseDate(wk.startStr);
+    var days = [];
+    for (var i=0;i<7;i++){ days.push(dateToStr(new Date(mon.getFullYear(), mon.getMonth(), mon.getDate()+i))); }
+    return days;
+  }
   // Whole days between an ISO timestamp (fmtTime-style, e.g. lastUpdatedAt) and
   // now — used for "priced 6 days ago" style aging notes. Never negative.
   function daysSince(iso){
@@ -434,6 +449,14 @@
 
   function activeCrew(){ return state.crew.filter(function(c){ return c.active !== false; }); }
   function isAdmin(){ return !!(state.session && state.session.role === "admin"); }
+  // "Lead" is a semi-management tier — Jayden's role. A lead sees every job
+  // (never prices), can jump into the shared Calendar and schedule jobs onto
+  // people, but can't create new jobs, see timesheets, manage crew/PINs, or
+  // touch the Trash — those stay admin-only. Their own personal "Log a Job"
+  // tab works exactly like any other crew member's and is kept separate from
+  // the all-jobs Management view so the two never blend together.
+  function isLead(){ return !!(state.session && state.session.role === "lead"); }
+  function canManage(){ return isAdmin() || isLead(); }
   function loginFor(crewId){ return state.logins.filter(function(l){ return l.id === crewId; })[0] || null; }
   function jobLogsFor(jobId){ return state.jobLogs.filter(function(l){ return l.jobId === jobId && !l.trashed; }); }
   // Jobs that haven't been merged away or trashed. Every job-listing view
@@ -466,9 +489,13 @@
       html += renderMergePicker();
     } else if (state.unmergeTargetId){
       html += renderUnmergePicker();
+    } else if (state.schedulingJobId){
+      html += renderScheduleForm();
+    } else if (state.viewingScheduleId){
+      html += renderScheduleDetail();
     } else if (state.viewingJobId){
       html += renderJobDetailView();
-    } else if (!isAdmin()){
+    } else if (!canManage()){
       html += renderEmployeeApp();
     } else if (state.activeTab === "log"){
       html += renderEmployeeApp();
@@ -476,7 +503,7 @@
       html += renderManagementTab();
     }
     html += "</main>";
-    html += '<div class="footer-note">Hydraciv Crew Portal — job sheets sync live' + (isAdmin() ? " to Management." : ".") + '</div>';
+    html += '<div class="footer-note">Hydraciv Crew Portal — job sheets sync live' + (canManage() ? " to Management." : ".") + '</div>';
     root.innerHTML = html;
     bindEvents();
   }
@@ -484,11 +511,11 @@
   function renderHero(){
     var who = "";
     if (state.session){
-      who = '<div class="who"><div class="name">' + esc(state.session.name) + '</div><div class="role">' + (isAdmin()?"Manager":"Crew") + '</div>' +
+      who = '<div class="who"><div class="name">' + esc(state.session.name) + '</div><div class="role">' + (isAdmin()?"Manager":(isLead()?"Lead":"Crew")) + '</div>' +
         '<div class="who-actions"><button data-action="change-pin">Change PIN</button><button data-action="logout">Log out</button></div></div>';
     }
     var tabs = "";
-    if (state.session && isAdmin()){
+    if (state.session && canManage()){
       tabs = '<div class="tabbar">' +
         '<button data-tab="log" class="' + (state.activeTab==="log"?"active":"") + '">Log a Job</button>' +
         '<button data-tab="management" class="' + (state.activeTab==="management"?"active":"") + '">Management</button>' +
@@ -583,13 +610,20 @@
       html += renderMyTimesheet(me);
       return html;
     }
+    if (state.logView === "calendar"){
+      html += renderMyCalendar(me);
+      return html;
+    }
+
+    var myScheduledCount = state.schedule.filter(function(s){ return !s.trashed && s.employeeName === me; }).length;
 
     html += '<div class="card">';
     html += '<div class="section-title">Your jobs</div>';
     html += '<p class="section-sub">Not finished yet? Add an update instead of starting a new one. Taking sick, annual, or trade-school leave? Use the leave button instead — it\'s not a job.</p>';
     html += '<button class="btn btn-primary btn-block" style="margin-bottom:8px" data-action="new-job">Start a new job</button>';
     html += '<button class="btn btn-outline btn-block" style="margin-bottom:8px" data-action="new-leave">Add a leave day</button>';
-    html += '<button class="btn btn-outline btn-block" style="margin-bottom:14px" data-action="view-timesheet">View your timesheet</button>';
+    html += '<button class="btn btn-outline btn-block" style="margin-bottom:8px" data-action="view-timesheet">View your timesheet</button>';
+    html += '<button class="btn btn-outline btn-block" style="margin-bottom:14px" data-action="view-calendar">View your calendar'+(myScheduledCount?' ('+myScheduledCount+')':'')+'</button>';
 
     var mine = myJobs(me);
     var notFinished = mine.filter(function(j){ return !j.myDone; });
@@ -910,14 +944,26 @@
   }
 
   // ---------- MANAGEMENT ----------
+  // Full manager tab set vs. Jayden's cut-down "lead" set — a lead only ever
+  // gets Jobs (no prices — see renderJobsAdmin) and the shared Calendar.
+  // Everything else (pricing queues, timesheets, subcontractor $, crew/PIN
+  // management, trash) stays admin-only.
+  var MGMT_TABS_ADMIN = [["overview","Overview"],["jobs","Jobs"],["calendar","Calendar"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["timesheets","Timesheets"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]];
+  var MGMT_TABS_LEAD = [["jobs","Jobs"],["calendar","Calendar"]];
+
   function renderManagementTab(){
+    var tabs = isAdmin() ? MGMT_TABS_ADMIN : MGMT_TABS_LEAD;
+    var allowed = tabs.map(function(t){ return t[0]; });
+    if (allowed.indexOf(state.mgmtSub) === -1) state.mgmtSub = "jobs";
+
     var html = '<div class="subtabs">';
-    [["overview","Overview"],["jobs","Jobs"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["timesheets","Timesheets"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]].forEach(function(t){
+    tabs.forEach(function(t){
       html += '<button data-mgmt="'+t[0]+'" class="'+(state.mgmtSub===t[0]?"on":"")+'">'+t[1]+'</button>';
     });
     html += '</div>';
     if (state.mgmtSub === "overview") html += renderOverview();
     else if (state.mgmtSub === "jobs") html += renderJobsAdmin();
+    else if (state.mgmtSub === "calendar") html += renderCalendarView();
     else if (state.mgmtSub === "bycrew") html += renderByCrew();
     else if (state.mgmtSub === "drew") html += renderForDrew();
     else if (state.mgmtSub === "priced") html += renderPricedJobs();
@@ -1086,6 +1132,12 @@
       return '<div class="card">'+backBtn+'<p class="empty-note">That job isn\'t there anymore.</p></div>';
     }
     var admin = isAdmin() && state.activeTab === "management";
+    // A lead (Jayden) browsing the shared "everyone's jobs" list under
+    // Management sees a read-only view — no editing, no add-update, no
+    // trash — so his own personal jobs (logged from the Log a Job tab, where
+    // this is false) stay the only place he actually changes anything. He
+    // still gets the Schedule action below, same as full management.
+    var leadBrowsing = isLead() && state.activeTab === "management";
     if (j.mergedInto){
       var target = state.jobs.filter(function(x){ return x.id === j.mergedInto; })[0];
       return '<div class="card">'+backBtn+
@@ -1099,7 +1151,7 @@
         (admin ? '<button type="button" class="btn btn-outline" data-restore-job="'+esc(j.id)+'">Restore this job</button>' : '') +
       '</div>';
     }
-    var employeeView = !admin;
+    var employeeView = !admin && !leadBrowsing;
 
     if (state.editingJobId === j.id){
       return backBtn + renderJobEditForm(j, {admin:admin});
@@ -1145,13 +1197,17 @@
     // and all stay one tap away — they're just office/paperwork actions you
     // reach for occasionally, not every time you open a job, so they're
     // tucked under "More actions" instead of competing for attention here.
-    var hasMoreActions = (admin || j.open !== false) || admin;
+    var hasMoreActions = !leadBrowsing && ((admin || j.open !== false) || admin);
     html += '<div class="log-foot" style="margin-top:14px">';
     if (employeeView){ html += '<button type="button" class="btn btn-outline btn-sm" data-add-update="'+esc(j.id)+'">Add update</button>'; }
-    html += '<button type="button" class="btn btn-ghost btn-sm" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">Edit job details</button>';
-    // Trash is open to crew too — e.g. an accidental duplicate job — not just
-    // management. Same confirm-before-you-do-it step either way.
-    html += '<button type="button" class="btn btn-outline btn-sm" style="color:#b3261e; border-color:#b3261e;" data-action="ask-trash-job" data-job-id="'+esc(j.id)+'">Move to trash&hellip;</button>';
+    if (canManage() && state.activeTab === "management"){ html += '<button type="button" class="btn btn-outline btn-sm" data-action="start-schedule" data-job-id="'+esc(j.id)+'">Schedule&hellip;</button>'; }
+    if (!leadBrowsing){
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">Edit job details</button>';
+      // Trash is open to crew too — e.g. an accidental duplicate job — not just
+      // management. Same confirm-before-you-do-it step either way. A lead
+      // browsing everyone's jobs doesn't get this — see leadBrowsing above.
+      html += '<button type="button" class="btn btn-outline btn-sm" style="color:#b3261e; border-color:#b3261e;" data-action="ask-trash-job" data-job-id="'+esc(j.id)+'">Move to trash&hellip;</button>';
+    }
     if (hasMoreActions) html += '<button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" data-action="toggle-job-actions" data-job-id="'+esc(j.id)+'">'+(state.jobActionsOpen?"Hide more actions":"More actions")+'</button>';
     html += '</div>';
 
@@ -1627,7 +1683,7 @@
 
     html += '</div>';
     if (list.length===0){ html += '<div class="card"><p class="empty-note">'+(q?"No jobs match.":"No jobs yet.")+'</p></div>'; }
-    else { list.forEach(function(j){ html += renderJobCard(j, {admin:true}); }); }
+    else { list.forEach(function(j){ html += renderJobCard(j, {admin:isAdmin()}); }); }
     return html;
   }
 
@@ -1824,6 +1880,230 @@
       .catch(function(){ toast("Couldn't restore that — try again."); });
   }
 
+  // ---------- Schedule / Calendar: an existing job assigned to a crew member for a
+  // specific day, by management or a "lead" — shows up on that person's own
+  // calendar with a description and photos of what needs doing, kept separate
+  // from the job's own regular visit history until they actually log it. ----------
+  function scheduleEntriesFor(date){
+    return state.schedule.filter(function(s){ return !s.trashed && s.date === date; })
+      .sort(function(a,b){ return (a.employeeName||"").localeCompare(b.employeeName||""); });
+  }
+
+  // Shared week view for admin + lead — Management &gt; Calendar — showing
+  // where everyone's scheduled to go, day by day.
+  function renderCalendarView(){
+    var days = weekDates(state.calendarWeekOffset);
+    var wk = weekBounds(state.calendarWeekOffset);
+    var html = '<div class="card">';
+    html += '<div class="section-title">Calendar</div>';
+    html += '<p class="section-sub">Where everyone\'s scheduled to go. Tap &ldquo;Schedule&hellip;&rdquo; on a job to add someone to a day.</p>';
+    html += '<div style="display:flex; align-items:center; justify-content:space-between; margin-top:10px;">';
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-cal-week="-1">&larr; Prev</button>';
+    html += '<div class="mono" style="font-size:13px">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div>';
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-cal-week="1">Next &rarr;</button>';
+    html += '</div>';
+    if (state.calendarWeekOffset !== 0){
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-action="cal-week-reset" style="margin-top:4px">Back to this week</button>';
+    }
+    html += '</div>';
+
+    days.forEach(function(d){
+      var entries = scheduleEntriesFor(d);
+      html += '<div class="card">';
+      html += '<div class="section-title" style="font-size:15px">'+fmtDay(d)+'</div>';
+      if (entries.length === 0){
+        html += '<p class="empty-note">Nobody scheduled.</p>';
+      } else {
+        entries.forEach(function(s){
+          var job = state.jobs.filter(function(x){ return x.id === s.jobId; })[0];
+          html += '<div class="crew-row"><div class="info"><div class="name">'+esc(s.employeeName)+'</div>' +
+            '<div class="email">'+(job?esc(job.venue):"(job no longer exists)")+(s.description?' &middot; '+esc(s.description):'')+'</div></div>';
+          html += '<button type="button" class="btn btn-ghost btn-sm" style="color:#b3261e" data-ask-trash-schedule="'+esc(s.id)+'">Remove</button>';
+          html += '</div>';
+          if (state.trashConfirmScheduleId === s.id){
+            html += '<div class="msg msg-error" style="margin-top:6px">Remove this from '+esc(s.employeeName)+'\'s calendar? They won\'t see it on their calendar anymore.</div>' +
+              '<div style="display:flex; gap:8px; margin:6px 0 10px;">' +
+              '<button type="button" class="btn btn-primary btn-sm" style="background:#b3261e; border-color:#b3261e;" data-confirm-trash-schedule="'+esc(s.id)+'">Yes, remove it</button>' +
+              '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-trash-schedule">Cancel</button>' +
+            '</div>';
+          }
+        });
+      }
+      html += '</div>';
+    });
+    return html;
+  }
+
+  // The "Schedule…" form, reached from a job's detail view — picks who's
+  // going, when, and lets whoever's scheduling it (management or lead) leave
+  // a description and photos of what needs doing before the crew member even
+  // gets there.
+  function renderScheduleForm(){
+    var job = state.jobs.filter(function(x){ return x.id === state.schedulingJobId; })[0];
+    var backBtn = '<button type="button" class="btn btn-ghost" data-action="cancel-schedule" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    if (!job){
+      return '<div class="card">'+backBtn+'<p class="empty-note">That job isn\'t there anymore.</p></div>';
+    }
+    var html = '<div class="card">';
+    html += backBtn;
+    html += '<div class="section-title">Schedule &ldquo;'+esc(job.venue)+'&rdquo;</div>';
+    html += '<p class="section-sub">Pick who should go and when — it\'ll show up on their calendar. Add a description and photos of what needs doing so they know before they get there.</p>';
+    if (state.scheduleFormMsg) html += '<div class="msg '+(state.scheduleFormMsg.type==="error"?"msg-error":"msg-success")+'">'+esc(state.scheduleFormMsg.text)+'</div>';
+    html += '<form id="schedule-form" data-job-id="'+esc(job.id)+'">';
+    html += '<div class="field"><label>Who\'s going</label><select name="employeeName" required>' +
+      '<option value="">Select someone&hellip;</option>' +
+      activeCrew().map(function(c){ return '<option value="'+esc(c.name)+'">'+esc(c.name)+'</option>'; }).join("") +
+    '</select></div>';
+    html += field("Date", '<input type="date" name="date" value="'+esc(todayStr())+'" required>');
+    html += field("What needs doing (optional)", '<textarea name="description" placeholder="Notes for whoever\'s going — what needs doing, anything they should know before they get there"></textarea>');
+    html += field("Photos (optional)", '<input type="file" name="photos" accept="image/*" multiple>');
+    html += '<button type="submit" class="btn btn-primary btn-block" '+(state.scheduleFormBusy?"disabled":"")+'>'+(state.scheduleFormBusy?"Saving…":"Add to calendar")+'</button>';
+    html += '</form></div>';
+    return html;
+  }
+
+  function onSubmitSchedule(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var jobId = f.getAttribute("data-job-id");
+    var job = state.jobs.filter(function(x){ return x.id === jobId; })[0];
+    var employeeName = f.employeeName.value;
+    var date = f.date.value;
+    var description = f.description.value.trim();
+    var files = (f.photos && f.photos.files) ? Array.prototype.slice.call(f.photos.files) : [];
+
+    if (!job || !employeeName || !date){
+      state.scheduleFormMsg = {type:"error", text:"Pick who's going and a date first."};
+      render(); return;
+    }
+
+    state.scheduleFormBusy = true; state.scheduleFormMsg = null; render();
+
+    var scheduleRef = db.collection("schedule").doc();
+    var patch = {
+      jobId: jobId, employeeName: employeeName, date: date, description: description,
+      scheduledBy: (state.session && state.session.name) || "",
+      createdAt: new Date().toISOString(),
+    };
+
+    // Uploading is skipped (rather than failing the whole save) when there are
+    // no photos, or Storage was never enabled on this Firebase project — see
+    // the try/catch around firebase.storage() near the top of this file.
+    var uploadPromise = (files.length && storage)
+      ? Promise.all(files.map(function(file, i){
+          var path = "schedule-photos/" + scheduleRef.id + "/" + Date.now() + "-" + i + "-" + file.name;
+          return storage.ref().child(path).put(file).then(function(snap){ return snap.ref.getDownloadURL(); });
+        }))
+      : Promise.resolve([]);
+
+    uploadPromise.then(function(urls){
+      if (urls.length) patch.photoUrls = urls;
+      return scheduleRef.set(patch);
+    }).then(function(){
+      state.scheduleFormBusy = false;
+      state.schedulingJobId = null;
+      var msg = "Scheduled " + (job.venue||"that job") + " for " + employeeName;
+      if (files.length && !storage) msg += " — heads up, the photos weren't attached (photo storage isn't set up yet)";
+      toast(msg);
+      render();
+    }).catch(function(){
+      state.scheduleFormBusy = false;
+      state.scheduleFormMsg = {type:"error", text:"Couldn't save that — try again."};
+      render();
+    });
+  }
+
+  // A crew member tapping their own assigned job from their personal
+  // calendar — the description/photos whoever scheduled it left, plus a way
+  // straight into the normal "log this job" flow once they've done it.
+  function renderScheduleDetail(){
+    var s = state.schedule.filter(function(x){ return x.id === state.viewingScheduleId; })[0];
+    var backBtn = '<button type="button" class="btn btn-ghost" data-action="close-schedule-detail" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    if (!s || s.trashed){
+      return '<div class="card">'+backBtn+'<p class="empty-note">That\'s not on the calendar anymore.</p></div>';
+    }
+    var job = state.jobs.filter(function(x){ return x.id === s.jobId; })[0];
+    var html = '<div class="card">';
+    html += backBtn;
+    html += '<div class="section-title">'+(job?esc(job.venue):"Scheduled job")+'</div>';
+    html += '<p class="section-sub">'+esc(fmtDay(s.date))+' &middot; scheduled by '+esc(s.scheduledBy||"management")+'</p>';
+    if (job && job.jobDescription) html += '<div class="log-desc" style="margin-top:8px">'+esc(job.jobDescription)+'</div>';
+    if (s.description) html += '<div class="msg msg-info" style="margin-top:10px">'+esc(s.description)+'</div>';
+    if (s.photoUrls && s.photoUrls.length){
+      html += '<div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">';
+      s.photoUrls.forEach(function(url){
+        html += '<a href="'+esc(url)+'" target="_blank" rel="noopener"><img src="'+esc(url)+'" alt="" style="width:96px; height:96px; object-fit:cover; border-radius:8px; border:1px solid var(--line);"></a>';
+      });
+      html += '</div>';
+    }
+    html += '<div class="log-foot" style="margin-top:14px">';
+    if (job){
+      html += '<button type="button" class="btn btn-primary btn-sm" data-action="log-scheduled-job" data-job-id="'+esc(job.id)+'">Log this job</button>';
+    }
+    html += '</div></div>';
+    return html;
+  }
+
+  function trashSchedule(id){
+    if (!db || !id) return;
+    db.collection("schedule").doc(id).update({ trashed: true, trashedAt: new Date().toISOString() })
+      .then(function(){
+        toast("Removed from the calendar");
+        state.trashConfirmScheduleId = null;
+        render();
+      }).catch(function(){ toast("Couldn't remove that — try again."); });
+  }
+
+  function restoreSchedule(id){
+    if (!db || !id) return;
+    db.collection("schedule").doc(id).update({ trashed: false })
+      .then(function(){ toast("Restored to the calendar"); render(); })
+      .catch(function(){ toast("Couldn't restore that — try again."); });
+  }
+
+  // A crew member's own personal calendar — reached from "View your calendar"
+  // under Log a Job. Only ever shows jobs scheduled for THEM, never anyone
+  // else's — kept out of their regular job list so it doesn't get mixed up
+  // with jobs they've logged themselves.
+  function renderMyCalendar(me){
+    var days = weekDates(state.myCalendarWeekOffset);
+    var wk = weekBounds(state.myCalendarWeekOffset);
+    var html = '<div class="card">';
+    html += '<button type="button" class="btn btn-ghost" data-action="back-to-list" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    html += '<div class="section-title">Your calendar</div>';
+    html += '<p class="section-sub">Jobs scheduled for you, day by day.</p>';
+    html += '<div style="display:flex; align-items:center; justify-content:space-between; margin-top:10px;">';
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-my-cal-week="-1">&larr; Prev</button>';
+    html += '<div class="mono" style="font-size:13px">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div>';
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-my-cal-week="1">Next &rarr;</button>';
+    html += '</div>';
+    if (state.myCalendarWeekOffset !== 0){
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-action="my-cal-week-reset" style="margin-top:4px">Back to this week</button>';
+    }
+    html += '</div>';
+
+    days.forEach(function(d){
+      var entries = scheduleEntriesFor(d).filter(function(s){ return s.employeeName === me; });
+      html += '<div class="card">';
+      html += '<div class="section-title" style="font-size:15px">'+fmtDay(d)+'</div>';
+      if (entries.length === 0){
+        html += '<p class="empty-note">Nothing scheduled.</p>';
+      } else {
+        entries.forEach(function(s){
+          var job = state.jobs.filter(function(x){ return x.id === s.jobId; })[0];
+          html += '<div class="job-card job-card-tap" data-view-schedule="'+esc(s.id)+'">';
+          html += '<div class="log-venue">'+(job?esc(job.venue):"(job no longer exists)")+'</div>';
+          if (s.description) html += '<div class="hint" style="margin-top:2px">'+esc(s.description)+'</div>';
+          html += '<div class="job-card-cta">Tap for details <span aria-hidden="true">&rarr;</span></div>';
+          html += '</div>';
+        });
+      }
+      html += '</div>';
+    });
+    return html;
+  }
+
   function renderTrash(){
     var trashed = state.jobs.filter(function(j){ return j.trashed; });
     trashed.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
@@ -1837,10 +2117,12 @@
     trashedLogs.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
     var trashedSubJobs = state.subcontractorJobs.filter(function(s){ return s.trashed; });
     trashedSubJobs.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
+    var trashedSchedule = state.schedule.filter(function(s){ return s.trashed; });
+    trashedSchedule.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
 
     var html = '<div class="card">';
-    html += '<div class="section-title">Trash</div><p class="section-sub">Jobs, visit entries, leave days and subcontractor jobs moved here are hidden everywhere else but never deleted for good — restore any of them any time.</p>';
-    if (trashed.length===0 && trashedLeave.length===0 && trashedLogs.length===0 && trashedSubJobs.length===0){ html += '<p class="empty-note">Nothing in the trash.</p>'; }
+    html += '<div class="section-title">Trash</div><p class="section-sub">Jobs, visit entries, leave days, subcontractor jobs and calendar entries moved here are hidden everywhere else but never deleted for good — restore any of them any time.</p>';
+    if (trashed.length===0 && trashedLeave.length===0 && trashedLogs.length===0 && trashedSubJobs.length===0 && trashedSchedule.length===0){ html += '<p class="empty-note">Nothing in the trash.</p>'; }
     html += '</div>';
 
     trashed.forEach(function(j){
@@ -1876,6 +2158,16 @@
       trashedSubJobs.forEach(function(s){
         html += '<div class="crew-row"><div class="info"><div class="name">'+esc(s.name)+'</div><div class="email">'+esc(fmtDay(s.date))+(s.venue?' &middot; '+esc(s.venue):'')+'</div></div>' +
           '<button type="button" class="btn btn-outline btn-sm" data-restore-sub-job="'+esc(s.id)+'">Restore</button></div>';
+      });
+      html += '</div>';
+    }
+
+    if (trashedSchedule.length){
+      html += '<div class="card"><div class="section-title" style="font-size:17px">Removed calendar entries</div>';
+      trashedSchedule.forEach(function(s){
+        var job = state.jobs.filter(function(x){ return x.id === s.jobId; })[0];
+        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(s.employeeName)+'</div><div class="email">'+(job?esc(job.venue):"(job no longer exists)")+' &middot; '+esc(fmtDay(s.date))+'</div></div>' +
+          '<button type="button" class="btn btn-outline btn-sm" data-restore-schedule="'+esc(s.id)+'">Restore</button></div>';
       });
       html += '</div>';
     }
@@ -2175,8 +2467,10 @@
       html += '</div>';
       html += '<div class="field"><label>Role</label><div class="seg" data-seg="crewRole">' +
         '<button type="button" data-val="employee" class="'+(state.crewRole==="employee"?"on":"")+'">Employee</button>' +
+        '<button type="button" data-val="lead" class="'+(state.crewRole==="lead"?"on":"")+'">Lead</button>' +
         '<button type="button" data-val="admin" class="'+(state.crewRole==="admin"?"on":"")+'">Manager</button>' +
       '</div></div>';
+      html += '<p class="hint" style="margin-top:-8px">Lead sees every job (no prices) and can schedule jobs onto crew — everything else (timesheets, crew, trash) stays manager-only.</p>';
       html += '<button type="submit" class="btn btn-primary btn-block">Add to roster</button>';
       html += '</form>';
     }
@@ -2195,7 +2489,8 @@
           html += field("Email", '<input type="email" name="email" value="'+esc(c.email||"")+'" required>');
           html += '</div>';
           html += '<div class="field"><label>Role</label><div class="seg" data-seg="editCrewRole">' +
-            '<button type="button" data-val="employee" class="'+(c.role!=="admin"?"on":"")+'">Employee</button>' +
+            '<button type="button" data-val="employee" class="'+(c.role!=="admin" && c.role!=="lead"?"on":"")+'">Employee</button>' +
+            '<button type="button" data-val="lead" class="'+(c.role==="lead"?"on":"")+'">Lead</button>' +
             '<button type="button" data-val="admin" class="'+(c.role==="admin"?"on":"")+'">Manager</button>' +
           '</div></div>';
           html += '<p class="hint">Renaming won\'t change their name on jobs already logged — only new ones.</p>';
@@ -2229,7 +2524,7 @@
         }
         var login = loginFor(c.id);
         var pinPill = (login && login.pin) ? '<span class="pill pill-success">PIN set</span>' : '<span class="pill pill-warning">Not set yet</span>';
-        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(c.name)+' <span class="pill pill-neutral">'+(c.role==="admin"?"Manager":"Employee")+'</span>'+(c.active===false?' <span class="pill pill-neutral">inactive</span>':'')+'</div>' +
+        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(c.name)+' <span class="pill pill-neutral">'+(c.role==="admin"?"Manager":(c.role==="lead"?"Lead":"Employee"))+'</span>'+(c.active===false?' <span class="pill pill-neutral">inactive</span>':'')+'</div>' +
           (c.email?'<div class="email">'+esc(c.email)+'</div>':'') + '<div style="margin-top:4px">'+pinPill+'</div></div>' +
           '<div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">' +
           '<button class="btn btn-ghost btn-sm" style="padding:2px 4px" data-edit-crew="'+esc(c.id)+'">Edit</button>' +
@@ -2288,6 +2583,8 @@
     if (newLeaveBtn) newLeaveBtn.addEventListener("click", function(){ state.logView="leave"; render(); });
     var viewTimesheetBtn = root.querySelector('[data-action="view-timesheet"]');
     if (viewTimesheetBtn) viewTimesheetBtn.addEventListener("click", function(){ state.logView="timesheet"; render(); });
+    var viewCalendarBtn = root.querySelector('[data-action="view-calendar"]');
+    if (viewCalendarBtn) viewCalendarBtn.addEventListener("click", function(){ state.myCalendarWeekOffset=0; state.logView="calendar"; render(); });
     root.querySelectorAll("[data-edit-leave]").forEach(function(b){ b.addEventListener("click", function(){ state.editLeaveId=b.getAttribute("data-edit-leave"); state.logView="editLeave"; render(); }); });
     var leaveForm = document.getElementById("leave-form");
     if (leaveForm) leaveForm.addEventListener("submit", onSubmitLeaveForm);
@@ -2549,6 +2846,71 @@
     });
     root.querySelectorAll("[data-restore-job]").forEach(function(b){ b.addEventListener("click", function(){
       restoreJob(b.getAttribute("data-restore-job"));
+    }); });
+
+    // ---- Schedule / Calendar ----
+    var startScheduleBtn = root.querySelector('[data-action="start-schedule"]');
+    if (startScheduleBtn) startScheduleBtn.addEventListener("click", function(){
+      state.schedulingJobId = startScheduleBtn.getAttribute("data-job-id");
+      state.scheduleFormMsg = null;
+      render();
+    });
+    var cancelScheduleBtn = root.querySelector('[data-action="cancel-schedule"]');
+    if (cancelScheduleBtn) cancelScheduleBtn.addEventListener("click", function(){
+      state.schedulingJobId = null; state.scheduleFormMsg = null;
+      render();
+    });
+    var scheduleForm = document.getElementById("schedule-form");
+    if (scheduleForm) scheduleForm.addEventListener("submit", onSubmitSchedule);
+
+    root.querySelectorAll("[data-view-schedule]").forEach(function(b){ b.addEventListener("click", function(){
+      state.viewingScheduleId = b.getAttribute("data-view-schedule");
+      render();
+    }); });
+    var closeScheduleDetailBtn = root.querySelector('[data-action="close-schedule-detail"]');
+    if (closeScheduleDetailBtn) closeScheduleDetailBtn.addEventListener("click", function(){
+      state.viewingScheduleId = null;
+      render();
+    });
+    var logScheduledJobBtn = root.querySelector('[data-action="log-scheduled-job"]');
+    if (logScheduledJobBtn) logScheduledJobBtn.addEventListener("click", function(){
+      state.viewingScheduleId = null;
+      state.activeTab = "log";
+      state.logView = "update";
+      state.updateJobId = logScheduledJobBtn.getAttribute("data-job-id");
+      state.formMsg = null;
+      render();
+    });
+
+    root.querySelectorAll("[data-cal-week]").forEach(function(b){ b.addEventListener("click", function(){
+      state.calendarWeekOffset += parseInt(b.getAttribute("data-cal-week"),10);
+      render();
+    }); });
+    var calWeekResetBtn = root.querySelector('[data-action="cal-week-reset"]');
+    if (calWeekResetBtn) calWeekResetBtn.addEventListener("click", function(){ state.calendarWeekOffset = 0; render(); });
+
+    root.querySelectorAll("[data-my-cal-week]").forEach(function(b){ b.addEventListener("click", function(){
+      state.myCalendarWeekOffset += parseInt(b.getAttribute("data-my-cal-week"),10);
+      render();
+    }); });
+    var myCalWeekResetBtn = root.querySelector('[data-action="my-cal-week-reset"]');
+    if (myCalWeekResetBtn) myCalWeekResetBtn.addEventListener("click", function(){ state.myCalendarWeekOffset = 0; render(); });
+
+    root.querySelectorAll("[data-ask-trash-schedule]").forEach(function(b){ b.addEventListener("click", function(){
+      state.trashConfirmScheduleId = b.getAttribute("data-ask-trash-schedule");
+      render();
+    }); });
+    var cancelTrashScheduleBtn = root.querySelector('[data-action="cancel-trash-schedule"]');
+    if (cancelTrashScheduleBtn) cancelTrashScheduleBtn.addEventListener("click", function(){
+      state.trashConfirmScheduleId = null;
+      render();
+    });
+    var confirmTrashScheduleBtn = root.querySelector('[data-confirm-trash-schedule]');
+    if (confirmTrashScheduleBtn) confirmTrashScheduleBtn.addEventListener("click", function(){
+      trashSchedule(confirmTrashScheduleBtn.getAttribute("data-confirm-trash-schedule"));
+    });
+    root.querySelectorAll("[data-restore-schedule]").forEach(function(b){ b.addEventListener("click", function(){
+      restoreSchedule(b.getAttribute("data-restore-schedule"));
     }); });
 
     var askTrashLeaveBtn = root.querySelector('[data-ask-trash-leave]');
@@ -3028,6 +3390,7 @@
 
     firebase.auth().signInAnonymously().then(function(){
       db = firebase.firestore();
+      try{ storage = firebase.storage(); }catch(e){ /* Storage not enabled on this project yet — scheduling photos just won't upload until it is */ }
       dbStatus = "ready";
 
       // Any of these failing after the initial connect (e.g. a dropped
@@ -3064,6 +3427,11 @@
 
       db.collection("subcontractor-jobs").orderBy("createdAt","desc").limit(1000).onSnapshot(function(snap){
         state.subcontractorJobs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, onListenerError);
+
+      db.collection("schedule").orderBy("createdAt","desc").limit(1000).onSnapshot(function(snap){
+        state.schedule = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         render();
       }, onListenerError);
 
