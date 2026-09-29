@@ -1099,6 +1099,14 @@
       return renderJobEditForm(j, opts);
     }
 
+    // The job's own status (quoted/in-process/completed/invoiced) is set by
+    // management by hand and doesn't track what the crew actually said on
+    // their last visit — so on management-facing cards, also show what the
+    // most recent log entry reported: fully Completed, handed off ("My part
+    // done"), or still Follow-up needed. Crew members see this on their own
+    // cards already (their own "Not finished"/"Completed" tabs), so it's
+    // skipped there to avoid repeating it back to them.
+    var latestLog = jobLogsFor(j.id)[0];
     var html = '<div class="job-card job-card-tap" data-view-job="'+esc(j.id)+'">';
     html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
     if (j.assignedEmployees && j.assignedEmployees.length){
@@ -1108,6 +1116,15 @@
     html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">';
     if (j.isMerged){ html += '<span class="pill" style="background:var(--amber-soft); color:var(--amber-ink); border:1px solid var(--amber);">Combined job</span>'; }
     html += '<span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span>';
+    if (!opts.employeeView && latestLog){
+      if (latestLog.completed){
+        html += '<span class="pill pill-success">&#10003; Crew: Completed</span>';
+      } else if (latestLog.crewDone){
+        html += '<span class="pill" style="background:var(--amber-soft); color:var(--amber-ink);">Crew: My part done</span>';
+      } else {
+        html += '<span class="pill pill-warning">Crew: Follow-up needed</span>';
+      }
+    }
     if (opts.admin){
       html += (j.invoiceAmount != null && j.invoiceAmount !== "")
         ? '<span class="pill pill-success mono">$'+Number(j.invoiceAmount).toFixed(2)+'</span>'
