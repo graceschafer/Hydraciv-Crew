@@ -233,6 +233,22 @@
   .weeknav .label{font-weight:700; font-size:14.5px;}
   .weeknav button{background:var(--surface-2); border:none; border-radius:8px; width:34px; height:34px; cursor:pointer; font-size:16px; color:var(--ink);}
 
+  /* Month calendar grid — Management/Lead's shared Calendar tab */
+  .cal-grid{display:grid; grid-template-columns:repeat(7,1fr); gap:4px;}
+  .cal-dow{font-size:10px; font-weight:700; text-align:center; color:var(--ink-faint); text-transform:uppercase; padding-bottom:4px; letter-spacing:.03em;}
+  .cal-cell{
+    aspect-ratio:1/1; border:1px solid var(--line); border-radius:8px; background:var(--surface);
+    padding:5px 4px; cursor:pointer; display:flex; flex-direction:column; gap:2px; overflow:hidden; min-height:52px;
+  }
+  .cal-cell.blank{border-color:transparent; background:transparent; cursor:default;}
+  .cal-cell.today{border-color:var(--amber); border-width:2px;}
+  .cal-cell.sel{background:var(--accent-soft); border-color:var(--accent);}
+  .cal-cell .num{font-size:11.5px; font-weight:700; color:var(--ink-soft);}
+  .cal-cell.today .num{color:var(--warning);}
+  .cal-chips{display:flex; flex-direction:column; gap:1px; margin-top:1px;}
+  .cal-chip{font-size:8.5px; font-weight:700; background:var(--accent); color:#fff; border-radius:4px; padding:1px 4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .cal-more{font-size:8.5px; color:var(--ink-faint); font-weight:600;}
+
   .day-heading{font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); margin:16px 0 8px;}
   .day-heading:first-child{margin-top:0;}
 
@@ -342,9 +358,9 @@
     leaveLogs: [], editLeaveId: null, leaveType: "sick",
     subcontractorJobs: [], subJobBusy: false, subJobMsg: null, trashConfirmSubJobId: null,
     schedule: [],
-    schedulingJobId: null, scheduleFormBusy: false, scheduleFormMsg: null,
+    assignFormBusy: false, assignFormMsg: null,
     viewingScheduleId: null, trashConfirmScheduleId: null,
-    calendarWeekOffset: 0, myCalendarWeekOffset: 0,
+    calendarMonthOffset: 0, calendarSelectedDate: null,
   };
 
   function esc(s){
@@ -489,8 +505,6 @@
       html += renderMergePicker();
     } else if (state.unmergeTargetId){
       html += renderUnmergePicker();
-    } else if (state.schedulingJobId){
-      html += renderScheduleForm();
     } else if (state.viewingScheduleId){
       html += renderScheduleDetail();
     } else if (state.viewingJobId){
@@ -948,8 +962,8 @@
   // gets Jobs (no prices — see renderJobsAdmin) and the shared Calendar.
   // Everything else (pricing queues, timesheets, subcontractor $, crew/PIN
   // management, trash) stays admin-only.
-  var MGMT_TABS_ADMIN = [["overview","Overview"],["jobs","Jobs"],["calendar","Calendar"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["timesheets","Timesheets"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]];
-  var MGMT_TABS_LEAD = [["jobs","Jobs"],["calendar","Calendar"]];
+  var MGMT_TABS_ADMIN = [["overview","Overview"],["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["timesheets","Timesheets"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]];
+  var MGMT_TABS_LEAD = [["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"]];
 
   function renderManagementTab(){
     var tabs = isAdmin() ? MGMT_TABS_ADMIN : MGMT_TABS_LEAD;
@@ -963,6 +977,7 @@
     html += '</div>';
     if (state.mgmtSub === "overview") html += renderOverview();
     else if (state.mgmtSub === "jobs") html += renderJobsAdmin();
+    else if (state.mgmtSub === "assign") html += renderAssignTab();
     else if (state.mgmtSub === "calendar") html += renderCalendarView();
     else if (state.mgmtSub === "bycrew") html += renderByCrew();
     else if (state.mgmtSub === "drew") html += renderForDrew();
@@ -1135,8 +1150,9 @@
     // A lead (Jayden) browsing the shared "everyone's jobs" list under
     // Management sees a read-only view — no editing, no add-update, no
     // trash — so his own personal jobs (logged from the Log a Job tab, where
-    // this is false) stay the only place he actually changes anything. He
-    // still gets the Schedule action below, same as full management.
+    // this is false) stay the only place he actually changes anything.
+    // Assigning someone to a job lives entirely on the separate Assign tab,
+    // not here.
     var leadBrowsing = isLead() && state.activeTab === "management";
     if (j.mergedInto){
       var target = state.jobs.filter(function(x){ return x.id === j.mergedInto; })[0];
@@ -1200,7 +1216,6 @@
     var hasMoreActions = !leadBrowsing && ((admin || j.open !== false) || admin);
     html += '<div class="log-foot" style="margin-top:14px">';
     if (employeeView){ html += '<button type="button" class="btn btn-outline btn-sm" data-add-update="'+esc(j.id)+'">Add update</button>'; }
-    if (canManage() && state.activeTab === "management"){ html += '<button type="button" class="btn btn-outline btn-sm" data-action="start-schedule" data-job-id="'+esc(j.id)+'">Schedule&hellip;</button>'; }
     if (!leadBrowsing){
       html += '<button type="button" class="btn btn-ghost btn-sm" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">Edit job details</button>';
       // Trash is open to crew too — e.g. an accidental duplicate job — not just
@@ -1880,109 +1895,97 @@
       .catch(function(){ toast("Couldn't restore that — try again."); });
   }
 
-  // ---------- Schedule / Calendar: an existing job assigned to a crew member for a
-  // specific day, by management or a "lead" — shows up on that person's own
-  // calendar with a description and photos of what needs doing, kept separate
-  // from the job's own regular visit history until they actually log it. ----------
+  // ---------- Assign / Calendar: a pure calendar entry — "be at this site on
+  // this date, here's what's needed" — created by management or a "lead"
+  // (Jayden's semi-management role). It never creates or touches anything in
+  // the Jobs list; the crew member logs the actual job completely separately,
+  // the normal way, once they've done it. ----------
   function scheduleEntriesFor(date){
     return state.schedule.filter(function(s){ return !s.trashed && s.date === date; })
       .sort(function(a,b){ return (a.employeeName||"").localeCompare(b.employeeName||""); });
   }
 
-  // Shared week view for admin + lead — Management &gt; Calendar — showing
-  // where everyone's scheduled to go, day by day.
-  function renderCalendarView(){
-    var days = weekDates(state.calendarWeekOffset);
-    var wk = weekBounds(state.calendarWeekOffset);
-    var html = '<div class="card">';
-    html += '<div class="section-title">Calendar</div>';
-    html += '<p class="section-sub">Where everyone\'s scheduled to go. Tap &ldquo;Schedule&hellip;&rdquo; on a job to add someone to a day.</p>';
-    html += '<div style="display:flex; align-items:center; justify-content:space-between; margin-top:10px;">';
-    html += '<button type="button" class="btn btn-ghost btn-sm" data-cal-week="-1">&larr; Prev</button>';
-    html += '<div class="mono" style="font-size:13px">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div>';
-    html += '<button type="button" class="btn btn-ghost btn-sm" data-cal-week="1">Next &rarr;</button>';
-    html += '</div>';
-    if (state.calendarWeekOffset !== 0){
-      html += '<button type="button" class="btn btn-ghost btn-sm" data-action="cal-week-reset" style="margin-top:4px">Back to this week</button>';
-    }
-    html += '</div>';
-
-    days.forEach(function(d){
-      var entries = scheduleEntriesFor(d);
-      html += '<div class="card">';
-      html += '<div class="section-title" style="font-size:15px">'+fmtDay(d)+'</div>';
-      if (entries.length === 0){
-        html += '<p class="empty-note">Nobody scheduled.</p>';
-      } else {
-        entries.forEach(function(s){
-          var job = state.jobs.filter(function(x){ return x.id === s.jobId; })[0];
-          html += '<div class="crew-row"><div class="info"><div class="name">'+esc(s.employeeName)+'</div>' +
-            '<div class="email">'+(job?esc(job.venue):"(job no longer exists)")+(s.description?' &middot; '+esc(s.description):'')+'</div></div>';
-          html += '<button type="button" class="btn btn-ghost btn-sm" style="color:#b3261e" data-ask-trash-schedule="'+esc(s.id)+'">Remove</button>';
-          html += '</div>';
-          if (state.trashConfirmScheduleId === s.id){
-            html += '<div class="msg msg-error" style="margin-top:6px">Remove this from '+esc(s.employeeName)+'\'s calendar? They won\'t see it on their calendar anymore.</div>' +
-              '<div style="display:flex; gap:8px; margin:6px 0 10px;">' +
-              '<button type="button" class="btn btn-primary btn-sm" style="background:#b3261e; border-color:#b3261e;" data-confirm-trash-schedule="'+esc(s.id)+'">Yes, remove it</button>' +
-              '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-trash-schedule">Cancel</button>' +
-            '</div>';
-          }
-        });
-      }
-      html += '</div>';
-    });
-    return html;
+  // Every site that's ever been typed into the Assign form, most-recent
+  // first, deduplicated — lets the venue field autocomplete a repeat address
+  // instead of Grace or Jayden retyping it. Purely a typing convenience;
+  // picking one doesn't link this entry to anything.
+  function knownScheduleVenues(){
+    var seen={}, out=[];
+    state.schedule.filter(function(s){ return !s.trashed; })
+      .slice().sort(function(a,b){ return (b.createdAt||"").localeCompare(a.createdAt||""); })
+      .forEach(function(s){ if (s.venue && !seen[s.venue]){ seen[s.venue]=1; out.push(s.venue); } });
+    return out;
   }
 
-  // The "Schedule…" form, reached from a job's detail view — picks who's
-  // going, when, and lets whoever's scheduling it (management or lead) leave
-  // a description and photos of what needs doing before the crew member even
-  // gets there.
-  function renderScheduleForm(){
-    var job = state.jobs.filter(function(x){ return x.id === state.schedulingJobId; })[0];
-    var backBtn = '<button type="button" class="btn btn-ghost" data-action="cancel-schedule" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
-    if (!job){
-      return '<div class="card">'+backBtn+'<p class="empty-note">That job isn\'t there anymore.</p></div>';
-    }
+  // The month + the 7-wide grid it needs to draw — Monday-first, with
+  // leading blank cells so the 1st lands under the right weekday. offset is
+  // in months from the current month (0 = this month), same idea as
+  // weekBounds' week offset.
+  function monthInfo(offset){
+    var base = new Date();
+    var first = new Date(base.getFullYear(), base.getMonth()+offset, 1);
+    var year = first.getFullYear(), month = first.getMonth();
+    var startWeekday = (first.getDay() + 6) % 7; // Mon=0..Sun=6
+    var daysInMonth = new Date(year, month+1, 0).getDate();
+    var label = first.toLocaleDateString(undefined, {month:"long", year:"numeric"});
+    return {year:year, month:month, startWeekday:startWeekday, daysInMonth:daysInMonth, label:label};
+  }
+
+  // Assign a job — the form itself. Its own tab (not tucked inside a job's
+  // detail view) because it doesn't need an existing job to point at.
+  function renderAssignTab(){
     var html = '<div class="card">';
-    html += backBtn;
-    html += '<div class="section-title">Schedule &ldquo;'+esc(job.venue)+'&rdquo;</div>';
-    html += '<p class="section-sub">Pick who should go and when — it\'ll show up on their calendar. Add a description and photos of what needs doing so they know before they get there.</p>';
-    if (state.scheduleFormMsg) html += '<div class="msg '+(state.scheduleFormMsg.type==="error"?"msg-error":"msg-success")+'">'+esc(state.scheduleFormMsg.text)+'</div>';
-    html += '<form id="schedule-form" data-job-id="'+esc(job.id)+'">';
-    html += '<div class="field"><label>Who\'s going</label><select name="employeeName" required>' +
+    html += '<div class="section-title">Assign a job</div>';
+    html += '<p class="section-sub">Tell a crew member where to go and when — it lands on their calendar with whatever notes and photos you add. This doesn\'t touch the Jobs list; they log the actual job themselves afterwards, the normal way.</p>';
+    if (state.assignFormMsg) html += '<div class="msg '+(state.assignFormMsg.type==="error"?"msg-error":"msg-success")+'">'+esc(state.assignFormMsg.text)+'</div>';
+    html += '<form id="assign-form">';
+    html += field("Site / address", '<div class="autocomplete-wrap"><input type="text" id="assign-venue-input" name="venue" placeholder="e.g. 14 Marlow St, or just describe where" autocomplete="off" required>' +
+      '<div id="assign-venue-suggestions" class="autocomplete-list" hidden></div></div>');
+    html += field("What needs doing", '<textarea name="description" placeholder="Notes for whoever\'s going — what needs doing, anything they should know before they get there"></textarea>');
+    html += '<div class="row2">';
+    html += field("Who's going", '<select name="employeeName" required>' +
       '<option value="">Select someone&hellip;</option>' +
       activeCrew().map(function(c){ return '<option value="'+esc(c.name)+'">'+esc(c.name)+'</option>'; }).join("") +
-    '</select></div>';
+    '</select>');
     html += field("Date", '<input type="date" name="date" value="'+esc(todayStr())+'" required>');
-    html += field("What needs doing (optional)", '<textarea name="description" placeholder="Notes for whoever\'s going — what needs doing, anything they should know before they get there"></textarea>');
+    html += '</div>';
     html += field("Photos (optional)", '<input type="file" name="photos" accept="image/*" multiple>');
-    html += '<button type="submit" class="btn btn-primary btn-block" '+(state.scheduleFormBusy?"disabled":"")+'>'+(state.scheduleFormBusy?"Saving…":"Add to calendar")+'</button>';
+    html += '<button type="submit" class="btn btn-primary btn-block" '+(state.assignFormBusy?"disabled":"")+'>'+(state.assignFormBusy?"Saving…":"Add to calendar")+'</button>';
     html += '</form></div>';
+
+    var recent = state.schedule.filter(function(s){ return !s.trashed; })
+      .slice().sort(function(a,b){ return (b.createdAt||"").localeCompare(a.createdAt||""); }).slice(0,5);
+    if (recent.length){
+      html += '<div class="card"><div class="section-title" style="font-size:16px">Recently assigned</div>';
+      recent.forEach(function(s){
+        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(s.employeeName)+'</div>' +
+          '<div class="email">'+esc(s.venue)+' &middot; '+esc(fmtDay(s.date))+'</div></div></div>';
+      });
+      html += '</div>';
+    }
     return html;
   }
 
-  function onSubmitSchedule(e){
+  function onSubmitAssign(e){
     e.preventDefault();
     if (!db) return;
     var f = e.target;
-    var jobId = f.getAttribute("data-job-id");
-    var job = state.jobs.filter(function(x){ return x.id === jobId; })[0];
+    var venue = f.venue.value.trim();
     var employeeName = f.employeeName.value;
     var date = f.date.value;
     var description = f.description.value.trim();
     var files = (f.photos && f.photos.files) ? Array.prototype.slice.call(f.photos.files) : [];
 
-    if (!job || !employeeName || !date){
-      state.scheduleFormMsg = {type:"error", text:"Pick who's going and a date first."};
+    if (!venue || !employeeName || !date){
+      state.assignFormMsg = {type:"error", text:"Fill in the site, who's going, and a date."};
       render(); return;
     }
 
-    state.scheduleFormBusy = true; state.scheduleFormMsg = null; render();
+    state.assignFormBusy = true; state.assignFormMsg = null; render();
 
     var scheduleRef = db.collection("schedule").doc();
     var patch = {
-      jobId: jobId, employeeName: employeeName, date: date, description: description,
+      venue: venue, employeeName: employeeName, date: date, description: description,
       scheduledBy: (state.session && state.session.name) || "",
       createdAt: new Date().toISOString(),
     };
@@ -2001,35 +2004,93 @@
       if (urls.length) patch.photoUrls = urls;
       return scheduleRef.set(patch);
     }).then(function(){
-      state.scheduleFormBusy = false;
-      state.schedulingJobId = null;
-      var msg = "Scheduled " + (job.venue||"that job") + " for " + employeeName;
+      state.assignFormBusy = false;
+      var msg = "Added to " + employeeName + "'s calendar";
       if (files.length && !storage) msg += " — heads up, the photos weren't attached (photo storage isn't set up yet)";
       toast(msg);
       render();
     }).catch(function(){
-      state.scheduleFormBusy = false;
-      state.scheduleFormMsg = {type:"error", text:"Couldn't save that — try again."};
+      state.assignFormBusy = false;
+      state.assignFormMsg = {type:"error", text:"Couldn't save that — try again."};
       render();
     });
   }
 
+  // Shared month view for admin + lead — Management &gt; Calendar — showing
+  // where everyone's scheduled to go. Tap a day to see who's where and remove
+  // an entry if it was a mistake.
+  function renderCalendarView(){
+    var info = monthInfo(state.calendarMonthOffset);
+    var html = '<div class="card">';
+    html += '<div class="section-title">Calendar</div>';
+    html += '<p class="section-sub">Where everyone\'s scheduled to go — tap a day to see who\'s where.</p>';
+    html += '<div style="display:flex; align-items:center; justify-content:space-between; margin-top:10px;">';
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-cal-month="-1">&larr;</button>';
+    html += '<div style="font-weight:800; font-size:16px; font-family:\'Big Shoulders Display\'">'+esc(info.label)+'</div>';
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-cal-month="1">&rarr;</button>';
+    html += '</div>';
+    if (state.calendarMonthOffset !== 0){
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-action="cal-month-reset" style="margin-top:4px">Back to this month</button>';
+    }
+
+    html += '<div class="cal-grid" style="margin-top:12px">';
+    ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].forEach(function(dow){ html += '<div class="cal-dow">'+dow+'</div>'; });
+    for (var i=0;i<info.startWeekday;i++){ html += '<div class="cal-cell blank"></div>'; }
+    var todayNow = todayStr();
+    for (var day=1; day<=info.daysInMonth; day++){
+      var dateStr = info.year+"-"+pad2(info.month+1)+"-"+pad2(day);
+      var entries = scheduleEntriesFor(dateStr);
+      var isToday = dateStr === todayNow;
+      var isSel = state.calendarSelectedDate === dateStr;
+      html += '<div class="cal-cell'+(isToday?" today":"")+(isSel?" sel":"")+'" data-cal-day="'+dateStr+'">';
+      html += '<div class="num">'+day+'</div>';
+      if (entries.length){
+        html += '<div class="cal-chips">';
+        entries.slice(0,2).forEach(function(e){ html += '<div class="cal-chip">'+esc(e.employeeName)+'</div>'; });
+        if (entries.length>2) html += '<div class="cal-more">+'+(entries.length-2)+' more</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+    html += '</div></div>';
+
+    if (state.calendarSelectedDate){
+      var dayEntries = scheduleEntriesFor(state.calendarSelectedDate);
+      html += '<div class="card"><div class="section-title" style="font-size:16px">'+esc(fmtDay(state.calendarSelectedDate))+'</div>';
+      if (!dayEntries.length){ html += '<p class="empty-note">Nobody scheduled this day.</p>'; }
+      dayEntries.forEach(function(s){
+        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(s.employeeName)+'</div>' +
+          '<div class="email">'+esc(s.venue)+(s.description?' &middot; '+esc(s.description):'')+'</div></div>';
+        html += '<button type="button" class="btn btn-ghost btn-sm" style="color:#b3261e" data-ask-trash-schedule="'+esc(s.id)+'">Remove</button>';
+        html += '</div>';
+        if (state.trashConfirmScheduleId === s.id){
+          html += '<div class="msg msg-error" style="margin-top:6px">Remove this from '+esc(s.employeeName)+'\'s calendar? They won\'t see it anymore.</div>' +
+            '<div style="display:flex; gap:8px; margin:6px 0 10px;">' +
+            '<button type="button" class="btn btn-primary btn-sm" style="background:#b3261e; border-color:#b3261e;" data-confirm-trash-schedule="'+esc(s.id)+'">Yes, remove it</button>' +
+            '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-trash-schedule">Cancel</button>' +
+          '</div>';
+        }
+      });
+      html += '</div>';
+    }
+    return html;
+  }
+
   // A crew member tapping their own assigned job from their personal
-  // calendar — the description/photos whoever scheduled it left, plus a way
-  // straight into the normal "log this job" flow once they've done it.
+  // calendar — purely look-and-see: the site, whatever notes and photos
+  // whoever assigned it left, and nothing else. No button into logging —
+  // they log it themselves afterwards, completely separately.
   function renderScheduleDetail(){
     var s = state.schedule.filter(function(x){ return x.id === state.viewingScheduleId; })[0];
     var backBtn = '<button type="button" class="btn btn-ghost" data-action="close-schedule-detail" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
     if (!s || s.trashed){
       return '<div class="card">'+backBtn+'<p class="empty-note">That\'s not on the calendar anymore.</p></div>';
     }
-    var job = state.jobs.filter(function(x){ return x.id === s.jobId; })[0];
     var html = '<div class="card">';
     html += backBtn;
-    html += '<div class="section-title">'+(job?esc(job.venue):"Scheduled job")+'</div>';
-    html += '<p class="section-sub">'+esc(fmtDay(s.date))+' &middot; scheduled by '+esc(s.scheduledBy||"management")+'</p>';
-    if (job && job.jobDescription) html += '<div class="log-desc" style="margin-top:8px">'+esc(job.jobDescription)+'</div>';
-    if (s.description) html += '<div class="msg msg-info" style="margin-top:10px">'+esc(s.description)+'</div>';
+    html += '<div class="section-title">'+esc(s.venue)+'</div>';
+    html += '<p class="section-sub">'+esc(fmtDay(s.date))+' &middot; assigned by '+esc(s.scheduledBy||"management")+'</p>';
+    if (s.description) html += '<div class="msg msg-info">'+esc(s.description)+'</div>';
     if (s.photoUrls && s.photoUrls.length){
       html += '<div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">';
       s.photoUrls.forEach(function(url){
@@ -2037,11 +2098,8 @@
       });
       html += '</div>';
     }
-    html += '<div class="log-foot" style="margin-top:14px">';
-    if (job){
-      html += '<button type="button" class="btn btn-primary btn-sm" data-action="log-scheduled-job" data-job-id="'+esc(job.id)+'">Log this job</button>';
-    }
-    html += '</div></div>';
+    html += '<p class="hint" style="margin-top:14px">Log this the normal way from your job list once it\'s done.</p>';
+    html += '</div>';
     return html;
   }
 
@@ -2063,44 +2121,27 @@
   }
 
   // A crew member's own personal calendar — reached from "View your calendar"
-  // under Log a Job. Only ever shows jobs scheduled for THEM, never anyone
-  // else's — kept out of their regular job list so it doesn't get mixed up
-  // with jobs they've logged themselves.
+  // under Log a Job. Only ever shows what's been assigned to THEM, never
+  // anyone else's, and has nothing to do with logging — see
+  // renderScheduleDetail above.
   function renderMyCalendar(me){
-    var days = weekDates(state.myCalendarWeekOffset);
-    var wk = weekBounds(state.myCalendarWeekOffset);
+    var mine = state.schedule.filter(function(s){ return !s.trashed && s.employeeName === me; })
+      .slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
     var html = '<div class="card">';
     html += '<button type="button" class="btn btn-ghost" data-action="back-to-list" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
     html += '<div class="section-title">Your calendar</div>';
-    html += '<p class="section-sub">Jobs scheduled for you, day by day.</p>';
-    html += '<div style="display:flex; align-items:center; justify-content:space-between; margin-top:10px;">';
-    html += '<button type="button" class="btn btn-ghost btn-sm" data-my-cal-week="-1">&larr; Prev</button>';
-    html += '<div class="mono" style="font-size:13px">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div>';
-    html += '<button type="button" class="btn btn-ghost btn-sm" data-my-cal-week="1">Next &rarr;</button>';
-    html += '</div>';
-    if (state.myCalendarWeekOffset !== 0){
-      html += '<button type="button" class="btn btn-ghost btn-sm" data-action="my-cal-week-reset" style="margin-top:4px">Back to this week</button>';
+    html += '<p class="section-sub">Jobs assigned to you, with any notes or photos — tap one to see it. Log it from your job list as normal once it\'s done.</p>';
+    if (!mine.length){ html += '<p class="empty-note">Nothing scheduled.</p>'; }
+    else {
+      mine.forEach(function(s){
+        html += '<div class="job-card job-card-tap" data-view-schedule="'+esc(s.id)+'">';
+        html += '<div class="log-venue">'+esc(s.venue)+'</div>';
+        html += '<div class="hint" style="margin-top:2px">'+esc(fmtDay(s.date))+'</div>';
+        html += '<div class="job-card-cta">Tap for details <span aria-hidden="true">&rarr;</span></div>';
+        html += '</div>';
+      });
     }
     html += '</div>';
-
-    days.forEach(function(d){
-      var entries = scheduleEntriesFor(d).filter(function(s){ return s.employeeName === me; });
-      html += '<div class="card">';
-      html += '<div class="section-title" style="font-size:15px">'+fmtDay(d)+'</div>';
-      if (entries.length === 0){
-        html += '<p class="empty-note">Nothing scheduled.</p>';
-      } else {
-        entries.forEach(function(s){
-          var job = state.jobs.filter(function(x){ return x.id === s.jobId; })[0];
-          html += '<div class="job-card job-card-tap" data-view-schedule="'+esc(s.id)+'">';
-          html += '<div class="log-venue">'+(job?esc(job.venue):"(job no longer exists)")+'</div>';
-          if (s.description) html += '<div class="hint" style="margin-top:2px">'+esc(s.description)+'</div>';
-          html += '<div class="job-card-cta">Tap for details <span aria-hidden="true">&rarr;</span></div>';
-          html += '</div>';
-        });
-      }
-      html += '</div>';
-    });
     return html;
   }
 
@@ -2165,8 +2206,7 @@
     if (trashedSchedule.length){
       html += '<div class="card"><div class="section-title" style="font-size:17px">Removed calendar entries</div>';
       trashedSchedule.forEach(function(s){
-        var job = state.jobs.filter(function(x){ return x.id === s.jobId; })[0];
-        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(s.employeeName)+'</div><div class="email">'+(job?esc(job.venue):"(job no longer exists)")+' &middot; '+esc(fmtDay(s.date))+'</div></div>' +
+        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(s.employeeName)+'</div><div class="email">'+esc(s.venue)+' &middot; '+esc(fmtDay(s.date))+'</div></div>' +
           '<button type="button" class="btn btn-outline btn-sm" data-restore-schedule="'+esc(s.id)+'">Restore</button></div>';
       });
       html += '</div>';
@@ -2470,7 +2510,7 @@
         '<button type="button" data-val="lead" class="'+(state.crewRole==="lead"?"on":"")+'">Lead</button>' +
         '<button type="button" data-val="admin" class="'+(state.crewRole==="admin"?"on":"")+'">Manager</button>' +
       '</div></div>';
-      html += '<p class="hint" style="margin-top:-8px">Lead sees every job (no prices) and can schedule jobs onto crew — everything else (timesheets, crew, trash) stays manager-only.</p>';
+      html += '<p class="hint" style="margin-top:-8px">Lead sees every job (no prices) and can assign jobs to crew via the calendar — everything else (timesheets, crew, trash) stays manager-only.</p>';
       html += '<button type="submit" class="btn btn-primary btn-block">Add to roster</button>';
       html += '</form>';
     }
@@ -2584,7 +2624,7 @@
     var viewTimesheetBtn = root.querySelector('[data-action="view-timesheet"]');
     if (viewTimesheetBtn) viewTimesheetBtn.addEventListener("click", function(){ state.logView="timesheet"; render(); });
     var viewCalendarBtn = root.querySelector('[data-action="view-calendar"]');
-    if (viewCalendarBtn) viewCalendarBtn.addEventListener("click", function(){ state.myCalendarWeekOffset=0; state.logView="calendar"; render(); });
+    if (viewCalendarBtn) viewCalendarBtn.addEventListener("click", function(){ state.logView="calendar"; render(); });
     root.querySelectorAll("[data-edit-leave]").forEach(function(b){ b.addEventListener("click", function(){ state.editLeaveId=b.getAttribute("data-edit-leave"); state.logView="editLeave"; render(); }); });
     var leaveForm = document.getElementById("leave-form");
     if (leaveForm) leaveForm.addEventListener("submit", onSubmitLeaveForm);
@@ -2848,20 +2888,32 @@
       restoreJob(b.getAttribute("data-restore-job"));
     }); });
 
-    // ---- Schedule / Calendar ----
-    var startScheduleBtn = root.querySelector('[data-action="start-schedule"]');
-    if (startScheduleBtn) startScheduleBtn.addEventListener("click", function(){
-      state.schedulingJobId = startScheduleBtn.getAttribute("data-job-id");
-      state.scheduleFormMsg = null;
-      render();
-    });
-    var cancelScheduleBtn = root.querySelector('[data-action="cancel-schedule"]');
-    if (cancelScheduleBtn) cancelScheduleBtn.addEventListener("click", function(){
-      state.schedulingJobId = null; state.scheduleFormMsg = null;
-      render();
-    });
-    var scheduleForm = document.getElementById("schedule-form");
-    if (scheduleForm) scheduleForm.addEventListener("submit", onSubmitSchedule);
+    // ---- Assign / Calendar ----
+    var assignVenueInput = document.getElementById("assign-venue-input");
+    var assignVenueSuggestions = document.getElementById("assign-venue-suggestions");
+    if (assignVenueInput && assignVenueSuggestions){
+      var knownAssignVenues = knownScheduleVenues();
+      var showAssignVenueMatches = function(){
+        var q = assignVenueInput.value.trim().toLowerCase();
+        if (!q){ assignVenueSuggestions.hidden = true; assignVenueSuggestions.innerHTML = ""; return; }
+        var matches = knownAssignVenues.filter(function(v){ return v.toLowerCase().indexOf(q) !== -1; }).slice(0,8);
+        if (!matches.length){ assignVenueSuggestions.hidden = true; assignVenueSuggestions.innerHTML = ""; return; }
+        assignVenueSuggestions.innerHTML = matches.map(function(v){ return '<button type="button">'+esc(v)+'</button>'; }).join("");
+        assignVenueSuggestions.hidden = false;
+      };
+      assignVenueInput.addEventListener("input", showAssignVenueMatches);
+      assignVenueInput.addEventListener("focus", showAssignVenueMatches);
+      assignVenueSuggestions.addEventListener("mousedown", function(e){
+        var btn = e.target.closest("button");
+        if (!btn) return;
+        e.preventDefault();
+        assignVenueInput.value = btn.textContent;
+        assignVenueSuggestions.hidden = true; assignVenueSuggestions.innerHTML = "";
+      });
+      assignVenueInput.addEventListener("blur", function(){ setTimeout(function(){ assignVenueSuggestions.hidden = true; }, 120); });
+    }
+    var assignForm = document.getElementById("assign-form");
+    if (assignForm) assignForm.addEventListener("submit", onSubmitAssign);
 
     root.querySelectorAll("[data-view-schedule]").forEach(function(b){ b.addEventListener("click", function(){
       state.viewingScheduleId = b.getAttribute("data-view-schedule");
@@ -2872,29 +2924,19 @@
       state.viewingScheduleId = null;
       render();
     });
-    var logScheduledJobBtn = root.querySelector('[data-action="log-scheduled-job"]');
-    if (logScheduledJobBtn) logScheduledJobBtn.addEventListener("click", function(){
-      state.viewingScheduleId = null;
-      state.activeTab = "log";
-      state.logView = "update";
-      state.updateJobId = logScheduledJobBtn.getAttribute("data-job-id");
-      state.formMsg = null;
-      render();
-    });
 
-    root.querySelectorAll("[data-cal-week]").forEach(function(b){ b.addEventListener("click", function(){
-      state.calendarWeekOffset += parseInt(b.getAttribute("data-cal-week"),10);
+    root.querySelectorAll("[data-cal-month]").forEach(function(b){ b.addEventListener("click", function(){
+      state.calendarMonthOffset += parseInt(b.getAttribute("data-cal-month"),10);
+      state.calendarSelectedDate = null;
       render();
     }); });
-    var calWeekResetBtn = root.querySelector('[data-action="cal-week-reset"]');
-    if (calWeekResetBtn) calWeekResetBtn.addEventListener("click", function(){ state.calendarWeekOffset = 0; render(); });
-
-    root.querySelectorAll("[data-my-cal-week]").forEach(function(b){ b.addEventListener("click", function(){
-      state.myCalendarWeekOffset += parseInt(b.getAttribute("data-my-cal-week"),10);
+    var calMonthResetBtn = root.querySelector('[data-action="cal-month-reset"]');
+    if (calMonthResetBtn) calMonthResetBtn.addEventListener("click", function(){ state.calendarMonthOffset = 0; state.calendarSelectedDate = null; render(); });
+    root.querySelectorAll("[data-cal-day]").forEach(function(b){ b.addEventListener("click", function(){
+      var d = b.getAttribute("data-cal-day");
+      state.calendarSelectedDate = (state.calendarSelectedDate === d) ? null : d;
       render();
     }); });
-    var myCalWeekResetBtn = root.querySelector('[data-action="my-cal-week-reset"]');
-    if (myCalWeekResetBtn) myCalWeekResetBtn.addEventListener("click", function(){ state.myCalendarWeekOffset = 0; render(); });
 
     root.querySelectorAll("[data-ask-trash-schedule]").forEach(function(b){ b.addEventListener("click", function(){
       state.trashConfirmScheduleId = b.getAttribute("data-ask-trash-schedule");
