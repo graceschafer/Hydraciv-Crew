@@ -318,6 +318,15 @@
   var db = null;
   var storage = null;
   var dbStatus = "loading"; // loading | ready | unavailable
+  // dbStatus flips to "ready" as soon as anonymous sign-in succeeds, which
+  // happens before any collection's first onSnapshot has actually delivered
+  // data — so state.crew is briefly [] on every load, real crew or not.
+  // Without this flag, that split-second was indistinguishable from "this is
+  // a fresh install with nobody set up yet" and could flash the "Set up your
+  // manager account" screen, which creates a brand-new admin crew record
+  // with no duplicate-name check. Gate that screen on this instead of on
+  // state.crew.length alone.
+  var crewLoaded = false;
 
   // sessionStorage (not localStorage) on purpose — it clears itself when the
   // tab/app is actually closed, so nobody stays signed in to someone else's
@@ -493,7 +502,7 @@
     html += "<main>";
     if (dbStatus === "unavailable"){
       html += '<div class="card center-card"><div class="msg msg-error">Couldn\'t connect to the Hydraciv Crew database. Check your internet connection and reload the page — if it keeps happening, let whoever manages this app know.</div></div>';
-    } else if (dbStatus === "loading"){
+    } else if (dbStatus === "loading" || !crewLoaded){
       html += '<div class="card center-card"><p class="empty-note">Loading…</p></div>';
     } else if (state.crew.length === 0){
       html += renderSetupAdmin();
@@ -3096,6 +3105,15 @@
     if (!/^[0-9]{4}$/.test(pin)){ state.setupError="PIN must be 4 digits."; render(); return; }
     if (pin !== pin2){ state.setupError="PINs don't match."; render(); return; }
     var name = f.name.value.trim();
+    // Belt-and-braces: this screen is only meant to fire once, before any
+    // crew exist, but guard against a name clash the same way the regular
+    // Add Crew form does, in case it's ever reached with crew already there.
+    var clash = state.crew.some(function(c){ return c.name.trim().toLowerCase() === name.toLowerCase(); });
+    if (clash){
+      state.setupError = "There's already a crew member named \""+name+"\" — ask a manager to log you in from the Crew tab instead of setting up a new account.";
+      render();
+      return;
+    }
     db.collection("crew").add({name:name, email:f.email.value.trim(), role:"admin", active:true, createdAt:new Date().toISOString()})
       .then(function(ref){
         return db.collection("logins").doc(ref.id).set({pin:pin, pinSetAt:new Date().toISOString()}).then(function(){
@@ -3489,6 +3507,7 @@
       db.collection("crew").orderBy("createdAt","asc").onSnapshot(function(snap){
         state.crew = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         state.syncError = false;
+        crewLoaded = true;
         render();
       }, onListenerError);
 
