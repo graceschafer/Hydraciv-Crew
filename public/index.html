@@ -480,7 +480,11 @@
   // a merged or trashed job's own doc sticks around (Firestore rules forbid
   // deleting it) but should never show up as if it were still a live job.
   function visibleJobs(){ return state.jobs.filter(function(j){ return !j.mergedInto && !j.trashed; }); }
-  function openJobs(){ return visibleJobs().filter(function(j){ return j.open !== false; }); }
+  // Invoiced jobs are fully closed out — Grace wants them out of every
+  // ordinary view (Overview, Jobs, By Crew, For Drew) and reachable only
+  // from the dedicated Invoiced tab (or Trash, if one gets trashed).
+  function nonInvoicedJobs(){ return visibleJobs().filter(function(j){ return j.status !== "invoiced"; }); }
+  function openJobs(){ return nonInvoicedJobs().filter(function(j){ return j.open !== false; }); }
 
   // ---------- render ----------
   function render(){
@@ -962,7 +966,7 @@
   // gets Jobs (no prices — see renderJobsAdmin) and the shared Calendar.
   // Everything else (pricing queues, timesheets, subcontractor $, crew/PIN
   // management, trash) stays admin-only.
-  var MGMT_TABS_ADMIN = [["overview","Overview"],["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["timesheets","Timesheets"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]];
+  var MGMT_TABS_ADMIN = [["overview","Overview"],["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["invoiced","Invoiced"],["timesheets","Timesheets"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]];
   var MGMT_TABS_LEAD = [["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"]];
 
   function renderManagementTab(){
@@ -982,6 +986,7 @@
     else if (state.mgmtSub === "bycrew") html += renderByCrew();
     else if (state.mgmtSub === "drew") html += renderForDrew();
     else if (state.mgmtSub === "priced") html += renderPricedJobs();
+    else if (state.mgmtSub === "invoiced") html += renderInvoicedJobs();
     else if (state.mgmtSub === "timesheets") html += renderTimesheets();
     else if (state.mgmtSub === "subs") html += renderSubcontractors();
     else if (state.mgmtSub === "trash") html += renderTrash();
@@ -1063,6 +1068,7 @@
         '<p><strong>By Crew</strong> — pick a crew member to see just their jobs.</p>' +
         '<p><strong>For Drew</strong> — jobs flagged for pricing (the "Send to Drew for pricing" button on a job puts it here). Prices and notes here are never shown to crew.</p>' +
         '<p><strong>Priced</strong> — has a price set, not yet marked Invoiced.</p>' +
+        '<p><strong>Invoiced</strong> — billed and fully closed out. The moment a job is marked Invoiced it disappears from Overview, Jobs, By Crew, For Drew and Priced — this tab is the only place it still shows up.</p>' +
         '<p><strong>Trash</strong> — jobs someone moved out of the way (test entries, duplicates). Nothing is ever permanently deleted — anything here can be restored.</p>' +
         '<p><strong>Merge</strong> (button inside a job\'s detail view) — for when the same job got logged twice by different people; folds one into the other, keeping all the history.</p>' +
       '</div>';
@@ -1644,7 +1650,7 @@
   }
 
   function renderJobsAdmin(){
-    var filters = ["all","open","closed","invoiced","merged"];
+    var filters = ["all","open","closed","merged"];
     var q = (state.venueQuery || "").trim().toLowerCase();
 
     var html = '<div class="card">';
@@ -1664,25 +1670,26 @@
           return lhay.indexOf(q) !== -1;
         });
       }
-      // Searching looks across every job ever logged, regardless of status —
-      // the All/Open/Closed/Invoiced filter only applies when not searching.
-      list = visibleJobs().filter(jobMatches);
-      html += '<p class="hint" style="margin:8px 0 0">Searching everything, across all statuses.</p>';
+      // Searching looks across every non-invoiced job ever logged — invoiced
+      // jobs are kept out of the Jobs tab entirely, search included; see the
+      // Invoiced tab for those.
+      list = nonInvoicedJobs().filter(jobMatches);
+      html += '<p class="hint" style="margin:8px 0 0">Searching everything except invoiced jobs — see the Invoiced tab for those.</p>';
     } else {
-      list = visibleJobs();
-      if (state.jobsStatusFilter === "open") list = list.filter(function(j){return j.open!==false && j.status!=="invoiced";});
-      if (state.jobsStatusFilter === "closed") list = list.filter(function(j){return j.open===false && j.status!=="invoiced";});
-      if (state.jobsStatusFilter === "invoiced") list = list.filter(function(j){return j.status==="invoiced";});
+      list = nonInvoicedJobs();
+      if (state.jobsStatusFilter === "open") list = list.filter(function(j){return j.open!==false;});
+      if (state.jobsStatusFilter === "closed") list = list.filter(function(j){return j.open===false;});
       // "Merged" is a home base for jobs that have absorbed one or more other
       // jobs (see performMerge) — these tend to be the bigger, multi-visit
       // jobs Grace wants to keep an eye on separately from one-off single-visit
-      // jobs, right up until she's marked them complete/invoiced. It doesn't
-      // remove them from the other filters — it's just an easy way to find
-      // them all in one place. Open ones surface first, invoiced ones last.
+      // jobs, right up until she's marked them complete. It doesn't remove
+      // them from the other filters — it's just an easy way to find them all
+      // in one place. Open ones surface first, completed ones last; once one
+      // is invoiced it moves off this list into the Invoiced tab.
       if (state.jobsStatusFilter === "merged"){
         list = list.filter(function(j){ return j.isMerged; });
         list = list.slice().sort(function(a,b){
-          var rank = function(j){ return j.status==="invoiced" ? 2 : (j.status==="completed" ? 1 : 0); };
+          var rank = function(j){ return j.status==="completed" ? 1 : 0; };
           var r = rank(a) - rank(b);
           if (r !== 0) return r;
           return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||"");
@@ -1708,7 +1715,7 @@
     var sel = state.byCrewEmployee || (crew[0] && crew[0].name) || null;
 
     var html = '<div class="card">';
-    html += '<div class="section-title">By crew</div><p class="section-sub">Pick a crew member to see just their jobs — ongoing ones first, completed and invoiced pushed to the bottom.</p>';
+    html += '<div class="section-title">By crew</div><p class="section-sub">Pick a crew member to see just their jobs — ongoing ones first, completed pushed to the bottom. Invoiced jobs live in the Invoiced tab.</p>';
     html += '<div class="chips">' + crew.map(function(c){
       return '<button class="chip'+(sel===c.name?" on":"")+'" data-bycrew-emp="'+esc(c.name)+'">'+esc(c.name)+'</button>';
     }).join("") + '</div>';
@@ -1716,8 +1723,8 @@
 
     if (!sel){ html += '<div class="card"><p class="empty-note">Add crew first.</p></div>'; return html; }
 
-    var mine = visibleJobs().filter(function(j){ return (j.assignedEmployees||[]).indexOf(sel) !== -1; });
-    var rank = function(j){ return j.status==="invoiced" ? 2 : (j.status==="completed" ? 1 : 0); };
+    var mine = nonInvoicedJobs().filter(function(j){ return (j.assignedEmployees||[]).indexOf(sel) !== -1; });
+    var rank = function(j){ return j.status==="completed" ? 1 : 0; };
     mine.sort(function(a,b){
       var r = rank(a) - rank(b);
       if (r !== 0) return r;
@@ -1734,7 +1741,7 @@
 
   // ---------- For Drew: jobs sent through for pricing ----------
   function renderForDrew(){
-    var awaiting = visibleJobs().filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
+    var awaiting = nonInvoicedJobs().filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
     var byRecent = function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); };
     awaiting.sort(byRecent);
 
@@ -1748,14 +1755,14 @@
 
   // ---------- Priced: has a price, not yet marked Invoiced ----------
   function renderPricedJobs(){
-    var priced = visibleJobs().filter(function(j){ return j.invoiceAmount != null && j.invoiceAmount !== "" && j.status !== "invoiced"; });
+    var priced = nonInvoicedJobs().filter(function(j){ return j.invoiceAmount != null && j.invoiceAmount !== ""; });
     // Oldest-waiting first — the ones most at risk of being forgotten belong
     // at the top, not buried under whatever was priced most recently.
     var withAge = priced.map(function(j){ return {job:j, age: daysSince(j.pricedAt || j.lastUpdatedAt || j.createdAt)}; });
     withAge.sort(function(a,b){ return (b.age==null?-1:b.age) - (a.age==null?-1:a.age); });
 
     var html = '<div class="card">';
-    html += '<div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Jobs tab. Oldest waiting first.</p>';
+    html += '<div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Invoiced tab. Oldest waiting first.</p>';
     if (priced.length===0){ html += '<p class="empty-note">Nothing priced and waiting right now.</p>'; }
     html += '</div>';
     withAge.forEach(function(row){
@@ -1764,6 +1771,24 @@
       var style = (age!=null && age>=5) ? "color:#b3261e; font-weight:700;" : "";
       html += renderJobCard(row.job, {admin:true, agingNote: note, agingNoteStyle: style});
     });
+    return html;
+  }
+
+  // ---------- Invoiced: billed and fully closed out ----------
+  // Once a job is marked Invoiced it comes out of every other view (Overview,
+  // Jobs, By Crew, For Drew, Priced) — this tab (and Trash, if one gets
+  // trashed) is the only place it still shows up. Most recently invoiced first.
+  function renderInvoicedJobs(){
+    var invoiced = visibleJobs().filter(function(j){ return j.status === "invoiced"; });
+    invoiced.sort(function(a,b){
+      return (b.invoicedAt||b.lastUpdatedAt||b.createdAt||"").localeCompare(a.invoicedAt||a.lastUpdatedAt||a.createdAt||"");
+    });
+
+    var html = '<div class="card">';
+    html += '<div class="section-title">Invoiced</div><p class="section-sub">Billed and fully closed out — kept out of Jobs, By Crew, For Drew and Overview. This is the only place they live now.</p>';
+    if (invoiced.length===0){ html += '<p class="empty-note">Nothing invoiced yet.</p>'; }
+    html += '</div>';
+    invoiced.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
     return html;
   }
 
@@ -3355,7 +3380,10 @@
 
   function setJobStatus(jobId, status){
     if (!db) return;
-    db.collection("jobs").doc(jobId).update({status:status}).catch(function(){ toast("Couldn't update status."); });
+    // Stamp when a job is marked Invoiced — the Invoiced tab sorts on this —
+    // and clear it if the status is ever changed away from Invoiced again.
+    var patch = {status: status, invoicedAt: (status === "invoiced") ? new Date().toISOString() : null};
+    db.collection("jobs").doc(jobId).update(patch).catch(function(){ toast("Couldn't update status."); });
   }
 
   function toggleNeedsPricing(jobId){
