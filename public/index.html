@@ -267,6 +267,18 @@
   .job-card-tap:hover .job-card-cta{color:var(--accent);}
   .job-head{display:flex; justify-content:space-between; align-items:flex-start; gap:10px;}
   .job-num{font-family:"IBM Plex Mono"; font-weight:600; font-size:12.5px; color:var(--accent-strong);}
+
+  /* Job list as boxes, several per row, instead of one full-width card per
+     row — lets more jobs show on screen at once on a laptop/desktop, while
+     naturally collapsing to a single column on a phone-width screen. */
+  .jobs-grid{display:grid; gap:10px; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));}
+  .jobs-grid .job-card{margin-top:0;}
+  .jobs-grid .job-card + .job-card{margin-top:0;}
+  /* At grid widths the venue name and the status pills no longer fit
+     side-by-side without crowding, so stack them instead of running them
+     left/right like the full-width card does. */
+  .jobs-grid .job-head{flex-direction:column; align-items:stretch;}
+  .jobs-grid .job-head > div:last-child{text-align:left; flex-direction:row; flex-wrap:wrap; align-items:center; margin-top:2px;}
   .timeline{margin-top:10px; padding-top:10px; border-top:1px solid var(--line);}
   .timeline-item{padding:8px 0; border-bottom:1px dashed var(--line); font-size:13px;}
   .timeline-item:last-child{border-bottom:none;}
@@ -1825,7 +1837,11 @@
 
     html += '</div>';
     if (list.length===0){ html += '<div class="card"><p class="empty-note">'+(q?"No jobs match.":"No jobs yet.")+'</p></div>'; }
-    else { list.forEach(function(j){ html += renderJobCard(j, {admin:isAdmin()}); }); }
+    else {
+      html += '<div class="jobs-grid">';
+      list.forEach(function(j){ html += renderJobCard(j, {admin:isAdmin()}); });
+      html += '</div>';
+    }
     return html;
   }
 
@@ -1854,7 +1870,10 @@
     html += '<div class="card">';
     html += '<div class="section-title" style="font-size:17px">' + esc(sel) + "'s jobs</div>";
     if (mine.length === 0){ html += '<p class="empty-note">No jobs assigned to '+esc(sel)+' yet.</p>'; }
-    else { mine.forEach(function(j){ html += renderJobCard(j, {admin:true}); }); }
+    else {
+      html += '</div><div class="jobs-grid">';
+      mine.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
+    }
     html += '</div>';
     return html;
   }
@@ -1869,7 +1888,11 @@
     html += '<div class="section-title">For Drew to price</div><p class="section-sub">Jobs sent through for Drew (or anyone in management) to price.</p>';
     if (awaiting.length===0){ html += '<p class="empty-note">Nothing waiting on a price right now.</p>'; }
     html += '</div>';
-    awaiting.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
+    if (awaiting.length){
+      html += '<div class="jobs-grid">';
+      awaiting.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
+      html += '</div>';
+    }
     return html;
   }
 
@@ -1885,12 +1908,16 @@
     html += '<div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Invoiced tab. Oldest waiting first.</p>';
     if (priced.length===0){ html += '<p class="empty-note">Nothing priced and waiting right now.</p>'; }
     html += '</div>';
-    withAge.forEach(function(row){
-      var age = row.age;
-      var note = age==null ? "" : (age===0 ? "Priced today" : "Waiting " + age + " day" + (age===1?"":"s") + (row.job.pricedAt ? "" : " (approx.)"));
-      var style = (age!=null && age>=5) ? "color:#b3261e; font-weight:700;" : "";
-      html += renderJobCard(row.job, {admin:true, agingNote: note, agingNoteStyle: style});
-    });
+    if (withAge.length){
+      html += '<div class="jobs-grid">';
+      withAge.forEach(function(row){
+        var age = row.age;
+        var note = age==null ? "" : (age===0 ? "Priced today" : "Waiting " + age + " day" + (age===1?"":"s") + (row.job.pricedAt ? "" : " (approx.)"));
+        var style = (age!=null && age>=5) ? "color:#b3261e; font-weight:700;" : "";
+        html += renderJobCard(row.job, {admin:true, agingNote: note, agingNoteStyle: style});
+      });
+      html += '</div>';
+    }
     return html;
   }
 
@@ -1908,7 +1935,11 @@
     html += '<div class="section-title">Invoiced</div><p class="section-sub">Billed and fully closed out — kept out of Jobs, By Crew, For Drew and Overview. This is the only place they live now.</p>';
     if (invoiced.length===0){ html += '<p class="empty-note">Nothing invoiced yet.</p>'; }
     html += '</div>';
-    invoiced.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
+    if (invoiced.length){
+      html += '<div class="jobs-grid">';
+      invoiced.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
+      html += '</div>';
+    }
     return html;
   }
 
