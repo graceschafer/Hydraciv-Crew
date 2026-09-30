@@ -471,6 +471,10 @@
   // Shared by the "new job" client picker and management's "Edit job details"
   // client picker, so there's one list to keep in sync, not two.
   var CLIENT_OPTIONS = ["ALH","Pubco/Supreme","MRC/Pegasus","Black Rhino","Other","Unsure"];
+  // Sentinel stored in a job-log's alsoOnsite field when someone explicitly
+  // says nobody else was there, so "worked alone" and "just never answered
+  // the question" are distinguishable in the data, not both a blank string.
+  var ALONE_TEXT = "Alone";
 
   function activeCrew(){ return state.crew.filter(function(c){ return c.active !== false; }); }
   function isAdmin(){ return !!(state.session && state.session.role === "admin"); }
@@ -743,7 +747,25 @@
 
     var loggedUnder = isEdit ? (log.submittedBy || (log.employees && log.employees[0]) || "") : state.session.name;
     html += '<div class="field"><label>Logged under</label><p class="hint" style="margin:2px 0 0">'+esc(loggedUnder)+'\'s timesheet. Ticking or typing someone else\'s name here won\'t add hours to their sheet.</p></div>';
-    html += field("Anyone else onsite? (optional)", '<input type="text" name="alsoOnsite" value="'+(isEdit?esc(log.alsoOnsite||""):"")+'" placeholder="e.g. Charlotte, Bob">');
+
+    // Who else was onsite is now a required choice, not a field someone can
+    // just skip past — either name whoever else was there, or explicitly say
+    // it was a solo job. Existing entries logged before this was required
+    // (alsoOnsite blank, no ALONE_TEXT) start with neither option picked, so
+    // editing one of those forces a real answer instead of silently keeping
+    // the old blank.
+    var alsoOnsiteMode = "";
+    if (isEdit){
+      if (log.alsoOnsite === ALONE_TEXT) alsoOnsiteMode = "alone";
+      else if (log.alsoOnsite) alsoOnsiteMode = "with";
+    }
+    html += '<div class="field"><label>Anyone else onsite?</label><div class="seg" data-seg="alsoOnsiteMode">' +
+      '<button type="button" data-val="with" class="'+(alsoOnsiteMode==="with"?"on":"")+'">Someone else was there</button>' +
+      '<button type="button" data-val="alone" class="'+(alsoOnsiteMode==="alone"?"on":"")+'">By myself &mdash; no one else</button>' +
+    '</div></div>';
+    html += '<div id="also-onsite-name-field" style="display:'+(alsoOnsiteMode==="with"?"block":"none")+'">' +
+      field("Who else?", '<input type="text" id="also-onsite-input" name="alsoOnsite" value="'+(alsoOnsiteMode==="with"?esc(log.alsoOnsite||""):"")+'" placeholder="e.g. Charlotte, Bob">') +
+    '</div>';
 
     html += field("Materials used", '<textarea name="materials" placeholder="e.g. 2x 25mm ball valves, 10m copper pipe">'+(isEdit?esc(log.materials||""):"")+'</textarea>');
     // Management-only — crew just note who supplied the materials (e.g.
@@ -842,6 +864,37 @@
   }
 
   function field(label, inputHtml){ return '<div class="field"><label>'+esc(label)+'</label>'+inputHtml+'</div>'; }
+
+  // ---------- Venue name similarity (for suggested merge matches) ----------
+  // A cheap word-overlap + substring heuristic — not real fuzzy matching,
+  // but enough to surface "Deer Park" next to "Deer Park Hotel", or "14
+  // Marlow St" next to "Marlow Street", without pulling in a library for a
+  // single-file app.
+  function normalizeVenue(v){
+    return (v||"").toLowerCase().replace(/[^a-z0-9 ]/g," ").replace(/\s+/g," ").trim();
+  }
+  function venueSimilarity(a, b){
+    var na = normalizeVenue(a), nb = normalizeVenue(b);
+    if (!na || !nb) return 0;
+    if (na === nb) return 1;
+    if (na.indexOf(nb) !== -1 || nb.indexOf(na) !== -1) return 0.9;
+    var wa = na.split(" ").filter(function(w){ return w.length > 2; });
+    var wb = nb.split(" ").filter(function(w){ return w.length > 2; });
+    if (!wa.length || !wb.length) return 0;
+    var shared = wa.filter(function(w){ return wb.indexOf(w) !== -1; }).length;
+    return shared / Math.max(wa.length, wb.length);
+  }
+  // Other visible jobs whose venue looks like the same place as source's —
+  // shown first in the merge picker, before anyone has typed a search.
+  function suggestedMergeCandidates(source){
+    return visibleJobs()
+      .filter(function(j){ return j.id !== source.id; })
+      .map(function(j){ return {job:j, score: venueSimilarity(source.venue, j.venue)}; })
+      .filter(function(r){ return r.score >= 0.34; })
+      .sort(function(a,b){ return b.score - a.score; })
+      .slice(0,5)
+      .map(function(r){ return r.job; });
+  }
 
   function renderRecentForMe(me){
     // state.jobLogs is newest-first, so keeping the first entry seen per job
@@ -1295,9 +1348,15 @@
     // been entered against the docket so far.
     if (logs.length > 1){
       var summaryHours = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
+      // "Visits" means actual trips to site, not log entries — if two people
+      // (or a merge) leave two entries on the same date, that's one visit
+      // with two people on it, not two separate visits.
+      var visitDates = {};
+      logs.forEach(function(l){ if (l.date) visitDates[l.date] = true; });
+      var visitCount = Object.keys(visitDates).length;
       html += '<div class="stat-strip" style="margin-top:14px">';
       html += '<div class="cell"><div class="num mono">'+summaryHours.toFixed(1)+'</div><div class="label">Hours</div></div>';
-      html += '<div class="cell"><div class="num mono">'+logs.length+'</div><div class="label">Visits</div></div>';
+      html += '<div class="cell"><div class="num mono">'+visitCount+'</div><div class="label">Visits</div></div>';
       if (admin){
         var materialsCostTotal = logs.reduce(function(s,l){ return s + (l.materialsCost!=null ? Number(l.materialsCost) : 0); }, 0);
         html += '<div class="cell"><div class="num mono">$'+materialsCostTotal.toFixed(2)+'</div><div class="label">Materials</div></div>';
@@ -1331,7 +1390,7 @@
             if (admin && l.materialsCost != null) matLine += ' &mdash; $'+Number(l.materialsCost).toFixed(2);
             html += '<div class="vr-sub">'+matLine+'</div>';
           }
-          if (l.alsoOnsite) html += '<div class="vr-sub">Also onsite: '+esc(l.alsoOnsite)+'</div>';
+          if (l.alsoOnsite) html += '<div class="vr-sub">'+(l.alsoOnsite===ALONE_TEXT?"Worked alone":"Also onsite: "+esc(l.alsoOnsite))+'</div>';
           if (!l.completed && l.remainingWork) html += '<div class="vr-sub">Still to do: '+esc(l.remainingWork)+'</div>';
           if (l.crewDone) html += '<div class="vr-sub">Who\'s going back: '+(l.handoffUnsure?"Not sure yet":esc(l.handoffTo||"—"))+'</div>';
           if (!canChange) html += '<div class="vr-sub">From a previous work week &mdash; ask a manager to change or delete it.</div>';
@@ -1394,24 +1453,45 @@
     html += field("Search by venue", '<input type="text" id="merge-search-input" placeholder="e.g. Deer Park" value="'+esc(state.mergeQuery)+'" autocomplete="off">');
     html += '</div>';
 
+    function candidateCard(j){
+      var c = '<div class="job-card">';
+      c += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
+      if (j.jobDescription) c += '<div class="hint" style="margin-top:2px">'+esc(j.jobDescription)+'</div>';
+      c += '</div><span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span></div>';
+      c += '<button type="button" class="btn btn-outline btn-sm" style="margin-top:10px" data-pick-merge-target="'+esc(j.id)+'">Merge &ldquo;'+esc(source.venue)+'&rdquo; into this job</button>';
+      c += '</div>';
+      return c;
+    }
+
     var q = (state.mergeQuery||"").trim().toLowerCase();
+
+    // Before anyone's typed anything, lead with jobs whose venue looks like
+    // the same place — catches the common case of two crew members logging
+    // the same site under slightly different names before anyone searches.
+    if (!q){
+      var suggested = suggestedMergeCandidates(source);
+      if (suggested.length){
+        html += '<div class="card">';
+        html += '<div class="section-title" style="font-size:15px">Suggested matches</div>';
+        html += '<p class="hint" style="margin-top:-2px">Jobs whose name looks like &ldquo;'+esc(source.venue)+'&rdquo; — worth checking before you search for something else.</p>';
+        html += '</div>';
+        suggested.forEach(function(j){ html += candidateCard(j); });
+      }
+    }
+
     var candidates = visibleJobs().filter(function(j){ return j.id !== source.id; });
     if (q) candidates = candidates.filter(function(j){ return (j.venue||"").toLowerCase().indexOf(q) !== -1; });
     candidates.sort(function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); });
     candidates = candidates.slice(0,25);
 
     html += '<div class="card">';
+    html += '<div class="section-title" style="font-size:15px">'+(q?"Search results":"All jobs")+'</div>';
     if (candidates.length === 0){
-      html += '<p class="empty-note">'+(q?"No jobs match.":"Type a venue above to find the job to merge into.")+'</p>';
+      html += '<p class="empty-note">'+(q?"No jobs match.":"No other jobs yet.")+'</p>';
     } else {
-      candidates.forEach(function(j){
-        html += '<div class="job-card">';
-        html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
-        if (j.jobDescription) html += '<div class="hint" style="margin-top:2px">'+esc(j.jobDescription)+'</div>';
-        html += '</div><span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span></div>';
-        html += '<button type="button" class="btn btn-outline btn-sm" style="margin-top:10px" data-pick-merge-target="'+esc(j.id)+'">Merge &ldquo;'+esc(source.venue)+'&rdquo; into this job</button>';
-        html += '</div>';
-      });
+      html += '</div>';
+      candidates.forEach(function(j){ html += candidateCard(j); });
+      return html;
     }
     html += '</div>';
     return html;
@@ -2493,7 +2573,7 @@
       if (l.timeRange) hrs += ' <span class="p-flag">('+esc(l.timeRange)+')</span>';
       var extra = "";
       if (l.materials) extra += '<div class="p-meta">Materials: '+esc(l.materials)+'</div>';
-      if (l.alsoOnsite) extra += '<div class="p-meta">Also onsite: '+esc(l.alsoOnsite)+'</div>';
+      if (l.alsoOnsite) extra += '<div class="p-meta">'+(l.alsoOnsite===ALONE_TEXT?"Worked alone":"Also onsite: "+esc(l.alsoOnsite))+'</div>';
       if (!l.completed && l.remainingWork) extra += '<div class="p-meta">Still to do: '+esc(l.remainingWork)+'</div>';
       return '<div class="p-row"><div><strong>'+fmtDay(l.date)+'</strong> &middot; '+esc(l.submittedBy||"")+
         (l.completed ? '' : ' <span class="p-flag">(follow-up needed)</span>') + extra +
@@ -2731,6 +2811,13 @@
           }
           if (name === "crewRole"){ state.crewRole = b.getAttribute("data-val"); }
           if (name === "jobsFilter"){ state.jobsStatusFilter = b.getAttribute("data-val"); render(); }
+          if (name === "alsoOnsiteMode"){
+            var val = b.getAttribute("data-val");
+            var nameField = document.getElementById("also-onsite-name-field");
+            if (nameField) nameField.style.display = (val==="with") ? "block" : "none";
+            var nameInput = document.getElementById("also-onsite-input");
+            if (nameInput && val==="alone") nameInput.value = "";
+          }
         });
       });
     });
@@ -3206,7 +3293,9 @@
     var othersOn = root.querySelector('#job-form [data-seg="othersBefore"] .on');
     var othersBefore = othersOn ? othersOn.getAttribute("data-val") === "yes" : false;
     var employees = [state.session.name];
-    var alsoOnsite = f.alsoOnsite ? f.alsoOnsite.value.trim() : "";
+    var alsoOnsiteOn = root.querySelector('#job-form [data-seg="alsoOnsiteMode"] .on');
+    var alsoOnsiteMode = alsoOnsiteOn ? alsoOnsiteOn.getAttribute("data-val") : "";
+    var alsoOnsite = (alsoOnsiteMode === "alone") ? ALONE_TEXT : (f.alsoOnsite ? f.alsoOnsite.value.trim() : "");
     var materials = f.materials.value.trim();
     // Only present in the form for management (see renderJobForm) — never
     // read or written for a crew submission, so editing your own entry never
@@ -3230,6 +3319,10 @@
 
     if (!jobDescription || !date || !hours){
       state.formMsg = {type:"error", text:"Please fill in the job description, date and hours."};
+      render(); return;
+    }
+    if (alsoOnsiteMode !== "alone" && !alsoOnsite){
+      state.formMsg = {type:"error", text:"Let us know who else was onsite, or tap “By myself — no one else”."};
       render(); return;
     }
 
