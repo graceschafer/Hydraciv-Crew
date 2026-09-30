@@ -359,6 +359,7 @@
     unmergeTargetId: null, unmergeSelected: [],
     trashConfirmJobId: null, trashConfirmLeaveId: null, trashConfirmLogId: null,
     openLogActionsId: null,
+    editingLogMaterialsCostId: null,
     syncError: false,
     isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false,
     editingCrewId: null, crewFormError: "",
@@ -1385,10 +1386,23 @@
           html += '<div class="vr-body">';
           html += '<span class="mono">'+(l.hours!=null && l.hours!==""?esc(l.hours):"?")+'h</span>'+(l.timeRange?' <span class="hint">('+esc(l.timeRange)+')</span>':'')+' &middot; '+esc(l.submittedBy||"")+' &middot; '+statusText;
           if (l.jobDescription) html += '<div class="vr-sub">'+esc(l.jobDescription)+'</div>';
-          if (l.materials || (admin && l.materialsCost != null)){
-            var matLine = l.materials ? "Materials: "+esc(l.materials) : "Materials";
-            if (admin && l.materialsCost != null) matLine += ' &mdash; $'+Number(l.materialsCost).toFixed(2);
-            html += '<div class="vr-sub">'+matLine+'</div>';
+          if (l.materials) html += '<div class="vr-sub">Materials: '+esc(l.materials)+'</div>';
+          // Quick inline cost entry — tap the price (or "+ Add materials
+          // cost") right here on the visit, type the number, done. No need
+          // to open the full "Edit this entry" form just for this one field.
+          if (admin){
+            if (state.editingLogMaterialsCostId === l.id){
+              html += '<form data-materials-cost-form="'+esc(l.id)+'" style="display:flex; align-items:center; gap:6px; margin-top:4px;">' +
+                '<span class="hint">$</span>' +
+                '<input type="text" inputmode="decimal" name="materialsCostQuick" value="'+(l.materialsCost!=null?esc(l.materialsCost):"")+'" placeholder="e.g. 84.50" autofocus style="width:100px; padding:4px 6px;" class="mono">' +
+                '<button type="submit" class="btn btn-primary btn-sm" style="padding:3px 10px;">Save</button>' +
+                '<button type="button" class="btn btn-ghost btn-sm" style="padding:3px 6px;" data-cancel-materials-cost="'+esc(l.id)+'">Cancel</button>' +
+              '</form>';
+            } else if (l.materialsCost != null){
+              html += '<button type="button" class="vr-sub" style="display:block; background:none; border:none; padding:0; cursor:pointer; color:var(--success); font-weight:700; text-align:left;" data-add-materials-cost="'+esc(l.id)+'">Materials cost: $'+Number(l.materialsCost).toFixed(2)+' &middot; <span style="font-weight:400; text-decoration:underline;">edit</span></button>';
+            } else {
+              html += '<button type="button" class="vr-sub" style="display:block; background:none; border:none; padding:0; cursor:pointer; color:var(--ink-faint); text-decoration:underline; text-align:left;" data-add-materials-cost="'+esc(l.id)+'">+ Add materials cost</button>';
+            }
           }
           if (l.alsoOnsite) html += '<div class="vr-sub">'+(l.alsoOnsite===ALONE_TEXT?"Worked alone":"Also onsite: "+esc(l.alsoOnsite))+'</div>';
           if (!l.completed && l.remainingWork) html += '<div class="vr-sub">Still to do: '+esc(l.remainingWork)+'</div>';
@@ -2750,6 +2764,19 @@
     if (backBtn) backBtn.addEventListener("click", function(){ state.logView="list"; state.editLogId=null; state.editLeaveId=null; render(); });
     root.querySelectorAll("[data-edit-log]").forEach(function(b){ b.addEventListener("click", function(){ state.editLogId=b.getAttribute("data-edit-log"); state.formMsg=null; render(); }); });
 
+    root.querySelectorAll("[data-add-materials-cost]").forEach(function(b){ b.addEventListener("click", function(){
+      state.editingLogMaterialsCostId = b.getAttribute("data-add-materials-cost"); render();
+    }); });
+    root.querySelectorAll("[data-cancel-materials-cost]").forEach(function(b){ b.addEventListener("click", function(){
+      state.editingLogMaterialsCostId = null; render();
+    }); });
+    root.querySelectorAll("[data-materials-cost-form]").forEach(function(f){ f.addEventListener("submit", function(e){
+      e.preventDefault();
+      var logId = f.getAttribute("data-materials-cost-form");
+      var input = f.querySelector('input[name="materialsCostQuick"]');
+      quickSetMaterialsCost(logId, input ? input.value : "");
+    }); });
+
     var newLeaveBtn = root.querySelector('[data-action="new-leave"]');
     if (newLeaveBtn) newLeaveBtn.addEventListener("click", function(){ state.logView="leave"; render(); });
     var viewTimesheetBtn = root.querySelector('[data-action="view-timesheet"]');
@@ -2917,9 +2944,9 @@
     root.querySelectorAll("[data-job-status-select]").forEach(function(sel){
       sel.addEventListener("change", function(){ setJobStatus(sel.getAttribute("data-job-status-select"), sel.value); });
     });
-    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); state.jobActionsOpen = false; state.openLogActionsId = null; render(); }); });
+    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; render(); }); });
     var closeJobDetailBtn = root.querySelector('[data-action="close-job-detail"]');
-    if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){ state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; render(); });
+    if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){ state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null; render(); });
     var toggleJobActionsBtn = root.querySelector('[data-action="toggle-job-actions"]');
     if (toggleJobActionsBtn) toggleJobActionsBtn.addEventListener("click", function(){ state.jobActionsOpen = !state.jobActionsOpen; render(); });
     root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
@@ -3512,6 +3539,24 @@
     // and clear it if the status is ever changed away from Invoiced again.
     var patch = {status: status, invoicedAt: (status === "invoiced") ? new Date().toISOString() : null};
     db.collection("jobs").doc(jobId).update(patch).catch(function(){ toast("Couldn't update status."); });
+  }
+
+  // Quick inline materials-cost entry on a single visit — a lighter path
+  // than opening "Edit this entry" just to fill in one field.
+  function quickSetMaterialsCost(logId, rawValue){
+    if (!db || !logId) return;
+    var trimmed = (rawValue || "").trim();
+    var patch;
+    if (trimmed === ""){
+      patch = { materialsCost: null };
+    } else {
+      var num = parseFloat(trimmed);
+      if (isNaN(num) || num < 0){ toast("Enter a valid amount, e.g. 84.50."); return; }
+      patch = { materialsCost: Math.round(num * 100) / 100 };
+    }
+    db.collection("job-logs").doc(logId).update(patch)
+      .then(function(){ state.editingLogMaterialsCostId = null; toast("Materials cost saved"); render(); })
+      .catch(function(){ toast("Couldn't save that — try again."); });
   }
 
   function toggleNeedsPricing(jobId){
