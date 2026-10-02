@@ -381,6 +381,7 @@
     subcontractorJobs: [], subJobBusy: false, subJobMsg: null, trashConfirmSubJobId: null,
     schedule: [],
     assignFormBusy: false, assignFormMsg: null,
+    myScheduleFormOpen: false, myScheduleFormBusy: false, myScheduleFormMsg: null,
     viewingScheduleId: null, trashConfirmScheduleId: null,
     calendarMonthOffset: 0, calendarSelectedDate: null,
   };
@@ -2268,7 +2269,7 @@
     var html = '<div class="card">';
     html += backBtn;
     html += '<div class="section-title">'+esc(s.venue)+'</div>';
-    html += '<p class="section-sub">'+esc(fmtDay(s.date))+' &middot; assigned by '+esc(s.scheduledBy||"management")+'</p>';
+    html += '<p class="section-sub">'+esc(fmtDay(s.date))+' &middot; '+(s.selfAdded ? "added by you" : "assigned by "+esc(s.scheduledBy||"management"))+'</p>';
     if (s.description) html += '<div class="msg msg-info">'+esc(s.description)+'</div>';
     if (s.photoUrls && s.photoUrls.length){
       html += '<div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">';
@@ -2278,6 +2279,16 @@
       html += '</div>';
     }
     html += '<p class="hint" style="margin-top:14px">Log this the normal way from your job list once it\'s done.</p>';
+    if (s.selfAdded && state.session && s.employeeName === state.session.name){
+      html += '<button type="button" class="btn btn-ghost btn-sm" style="color:#b3261e; margin-top:10px; padding-left:0" data-ask-trash-schedule="'+esc(s.id)+'">Remove from your calendar</button>';
+      if (state.trashConfirmScheduleId === s.id){
+        html += '<div class="msg msg-error" style="margin-top:6px">Remove this from your calendar?</div>' +
+          '<div style="display:flex; gap:8px; margin:6px 0 2px;">' +
+          '<button type="button" class="btn btn-primary btn-sm" style="background:#b3261e; border-color:#b3261e;" data-confirm-trash-schedule="'+esc(s.id)+'">Yes, remove it</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-trash-schedule">Cancel</button>' +
+        '</div>';
+      }
+    }
     html += '</div>';
     return html;
   }
@@ -2309,19 +2320,70 @@
     var html = '<div class="card">';
     html += '<button type="button" class="btn btn-ghost" data-action="back-to-list" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
     html += '<div class="section-title">Your calendar</div>';
-    html += '<p class="section-sub">Jobs assigned to you, with any notes or photos — tap one to see it. Log it from your job list as normal once it\'s done.</p>';
+    html += '<p class="section-sub">Jobs assigned to you, plus anything you\'ve added yourself to keep track — tap one to see it. Log it from your job list as normal once it\'s done.</p>';
+
+    if (!state.myScheduleFormOpen){
+      html += '<button type="button" class="btn btn-outline btn-block" data-action="open-my-schedule-form" style="margin-bottom:4px">+ Add something to your calendar</button>';
+    } else {
+      if (state.myScheduleFormMsg) html += '<div class="msg '+(state.myScheduleFormMsg.type==="error"?"msg-error":"msg-success")+'">'+esc(state.myScheduleFormMsg.text)+'</div>';
+      html += '<form id="my-schedule-form" style="margin-top:6px">';
+      html += field("Site / address", '<input type="text" name="venue" placeholder="e.g. 14 Marlow St, or just describe where" autocomplete="off" required>');
+      html += field("Notes (optional)", '<textarea name="description" placeholder="Anything you want to remember about this"></textarea>');
+      html += field("Date", '<input type="date" name="date" value="'+esc(todayStr())+'" required>');
+      html += '<div style="display:flex; gap:8px;">';
+      html += '<button type="submit" class="btn btn-primary" style="flex:1" '+(state.myScheduleFormBusy?"disabled":"")+'>'+(state.myScheduleFormBusy?"Saving…":"Add to your calendar")+'</button>';
+      html += '<button type="button" class="btn btn-ghost" data-action="close-my-schedule-form">Cancel</button>';
+      html += '</div></form>';
+    }
+
     if (!mine.length){ html += '<p class="empty-note">Nothing scheduled.</p>'; }
     else {
       mine.forEach(function(s){
         html += '<div class="job-card job-card-tap" data-view-schedule="'+esc(s.id)+'">';
-        html += '<div class="log-venue">'+esc(s.venue)+'</div>';
-        html += '<div class="hint" style="margin-top:2px">'+esc(fmtDay(s.date))+'</div>';
+        html += '<div class="job-head"><div><div class="log-venue">'+esc(s.venue)+'</div>';
+        html += '<div class="hint" style="margin-top:2px">'+esc(fmtDay(s.date))+'</div></div>';
+        if (s.selfAdded) html += '<span class="pill pill-neutral">Added by you</span>';
+        html += '</div>';
         html += '<div class="job-card-cta">Tap for details <span aria-hidden="true">&rarr;</span></div>';
         html += '</div>';
       });
     }
     html += '</div>';
     return html;
+  }
+
+  function onSubmitMySchedule(e){
+    e.preventDefault();
+    if (!db || !state.session) return;
+    var f = e.target;
+    var venue = f.venue.value.trim();
+    var date = f.date.value;
+    var description = f.description.value.trim();
+
+    if (!venue || !date){
+      state.myScheduleFormMsg = {type:"error", text:"Fill in the site and a date."};
+      render(); return;
+    }
+
+    state.myScheduleFormBusy = true; state.myScheduleFormMsg = null; render();
+
+    var me = state.session.name;
+    var patch = {
+      venue: venue, employeeName: me, date: date, description: description,
+      scheduledBy: me, selfAdded: true,
+      createdAt: new Date().toISOString(),
+    };
+
+    db.collection("schedule").add(patch).then(function(){
+      state.myScheduleFormBusy = false;
+      state.myScheduleFormOpen = false;
+      toast("Added to your calendar");
+      render();
+    }).catch(function(){
+      state.myScheduleFormBusy = false;
+      state.myScheduleFormMsg = {type:"error", text:"Couldn't save that — try again."};
+      render();
+    });
   }
 
   function renderTrash(){
@@ -2795,7 +2857,7 @@
     if (newJobBtn) newJobBtn.addEventListener("click", function(){ state.logView="new"; state.formMsg=null; render(); });
     root.querySelectorAll("[data-add-update]").forEach(function(b){ b.addEventListener("click", function(){ state.logView="update"; state.updateJobId=b.getAttribute("data-add-update"); state.formMsg=null; render(); }); });
     var backBtn = root.querySelector('[data-action="back-to-list"]');
-    if (backBtn) backBtn.addEventListener("click", function(){ state.logView="list"; state.editLogId=null; state.editLeaveId=null; render(); });
+    if (backBtn) backBtn.addEventListener("click", function(){ state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.myScheduleFormOpen=false; state.myScheduleFormMsg=null; render(); });
     root.querySelectorAll("[data-edit-log]").forEach(function(b){ b.addEventListener("click", function(){ state.editLogId=b.getAttribute("data-edit-log"); state.formMsg=null; render(); }); });
 
     root.querySelectorAll("[data-add-materials-cost]").forEach(function(b){ b.addEventListener("click", function(){
@@ -2817,6 +2879,12 @@
     if (viewTimesheetBtn) viewTimesheetBtn.addEventListener("click", function(){ state.logView="timesheet"; render(); });
     var viewCalendarBtn = root.querySelector('[data-action="view-calendar"]');
     if (viewCalendarBtn) viewCalendarBtn.addEventListener("click", function(){ state.logView="calendar"; render(); });
+    var openMyScheduleBtn = root.querySelector('[data-action="open-my-schedule-form"]');
+    if (openMyScheduleBtn) openMyScheduleBtn.addEventListener("click", function(){ state.myScheduleFormOpen = true; state.myScheduleFormMsg = null; render(); });
+    var closeMyScheduleBtn = root.querySelector('[data-action="close-my-schedule-form"]');
+    if (closeMyScheduleBtn) closeMyScheduleBtn.addEventListener("click", function(){ state.myScheduleFormOpen = false; state.myScheduleFormMsg = null; render(); });
+    var myScheduleForm = document.getElementById("my-schedule-form");
+    if (myScheduleForm) myScheduleForm.addEventListener("submit", onSubmitMySchedule);
     root.querySelectorAll("[data-edit-leave]").forEach(function(b){ b.addEventListener("click", function(){ state.editLeaveId=b.getAttribute("data-edit-leave"); state.logView="editLeave"; render(); }); });
     var leaveForm = document.getElementById("leave-form");
     if (leaveForm) leaveForm.addEventListener("submit", onSubmitLeaveForm);
