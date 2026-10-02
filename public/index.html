@@ -379,6 +379,8 @@
     glossaryOpen: false,
     leaveLogs: [], editLeaveId: null, leaveType: "sick",
     subcontractorJobs: [], subJobBusy: false, subJobMsg: null, trashConfirmSubJobId: null,
+    materials: [], materialFormBusy: false, materialFormMsg: null,
+    editingMaterialId: null, trashConfirmMaterialId: null,
     schedule: [],
     assignFormBusy: false, assignFormMsg: null,
     myScheduleFormOpen: false, myScheduleFormBusy: false, myScheduleFormMsg: null,
@@ -1042,7 +1044,7 @@
   // gets Jobs (no prices — see renderJobsAdmin) and the shared Calendar.
   // Everything else (pricing queues, timesheets, subcontractor $, crew/PIN
   // management, trash) stays admin-only.
-  var MGMT_TABS_ADMIN = [["overview","Overview"],["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["invoiced","Invoiced"],["timesheets","Timesheets"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]];
+  var MGMT_TABS_ADMIN = [["overview","Overview"],["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["invoiced","Invoiced"],["timesheets","Timesheets"],["materials","Materials"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]];
   var MGMT_TABS_LEAD = [["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"]];
 
   function renderManagementTab(){
@@ -1064,6 +1066,7 @@
     else if (state.mgmtSub === "priced") html += renderPricedJobs();
     else if (state.mgmtSub === "invoiced") html += renderInvoicedJobs();
     else if (state.mgmtSub === "timesheets") html += renderTimesheets();
+    else if (state.mgmtSub === "materials") html += renderMaterials();
     else if (state.mgmtSub === "subs") html += renderSubcontractors();
     else if (state.mgmtSub === "trash") html += renderTrash();
     else html += renderCrewView();
@@ -1960,6 +1963,176 @@
     return out;
   }
 
+  // ---------- Materials: a running list of what's been bought (read off the
+  // credit card statement, a docket, whatever) — logged as soon as Grace
+  // knows about it, sometimes with the job already written down, sometimes
+  // not. "Assigned" here just means "I've sorted which job this belongs to
+  // and it's out of the way" — it's a tick, not a link to an actual job
+  // record, matching how Grace actually wants to use it.
+  function uniqueMaterialItems(){
+    var seen={}, out=[];
+    state.materials.slice().sort(function(a,b){ return (b.createdAt||"").localeCompare(a.createdAt||""); })
+      .forEach(function(m){ if (m.item && !seen[m.item]){ seen[m.item]=1; out.push(m.item); } });
+    return out;
+  }
+
+  function renderMaterials(){
+    var toSort = state.materials.filter(function(m){ return !m.trashed && !m.assigned; })
+      .slice().sort(function(a,b){ return (a.date||a.createdAt||"").localeCompare(b.date||b.createdAt||""); });
+    var assigned = state.materials.filter(function(m){ return !m.trashed && m.assigned; })
+      .slice().sort(function(a,b){ return (b.date||b.createdAt||"").localeCompare(a.date||a.createdAt||""); });
+    var toSortTotal = toSort.reduce(function(s,m){ return s + (m.cost!=null?Number(m.cost):0); }, 0);
+    var assignedTotal = assigned.reduce(function(s,m){ return s + (m.cost!=null?Number(m.cost):0); }, 0);
+
+    var html = '<div class="card">';
+    html += '<div class="section-title">Materials</div>';
+    html += '<p class="section-sub">Write down what gets bought — who it was from, what it cost, and the job if you already know it — then tick it off once you\'ve sorted which job it belongs to.</p>';
+    if (state.materialFormMsg) html += '<div class="msg '+(state.materialFormMsg.type==="error"?"msg-error":"msg-success")+'">'+esc(state.materialFormMsg.text)+'</div>';
+    html += '<form id="material-form">';
+    html += field("Bought from", '<div class="autocomplete-wrap"><input type="text" id="material-item-input" name="item" placeholder="e.g. Reece" autocomplete="off" required>' +
+      '<div id="material-item-suggestions" class="autocomplete-list" hidden></div></div>');
+    html += '<div class="row2">';
+    html += field("Cost ($)", '<input type="number" name="cost" step="0.01" min="0" placeholder="e.g. 90.00" required>');
+    html += field("Date", '<input type="date" name="date" value="'+esc(todayStr())+'">');
+    html += '</div>';
+    html += field("Job / venue (if you know it)", '<div class="autocomplete-wrap"><input type="text" id="material-venue-input" name="venue" placeholder="e.g. Deer Park Hotel" autocomplete="off">' +
+      '<div id="material-venue-suggestions" class="autocomplete-list" hidden></div></div>');
+    html += '<button type="submit" class="btn btn-primary btn-block" '+(state.materialFormBusy?"disabled":"")+'>'+(state.materialFormBusy?"Saving…":"Add to the list")+'</button>';
+    html += '</form></div>';
+
+    function materialCard(m, opts){
+      opts = opts || {};
+      var c;
+      if (state.editingMaterialId === m.id){
+        c = '<div class="job-card">';
+        c += '<form data-edit-material-form="'+esc(m.id)+'">';
+        c += field("Bought from", '<input type="text" name="item" value="'+esc(m.item||"")+'" required>');
+        c += '<div class="row2">';
+        c += field("Cost ($)", '<input type="number" name="cost" step="0.01" min="0" value="'+(m.cost!=null?esc(m.cost):"")+'" required>');
+        c += field("Date", '<input type="date" name="date" value="'+esc(m.date||"")+'">');
+        c += '</div>';
+        c += field("Job / venue", '<input type="text" name="venue" value="'+esc(m.venue||"")+'">');
+        c += '<div style="display:flex; gap:8px;">';
+        c += '<button type="submit" class="btn btn-primary btn-sm" style="flex:1">Save</button>';
+        c += '<button type="button" class="btn btn-ghost btn-sm" data-cancel-edit-material="'+esc(m.id)+'">Cancel</button>';
+        c += '</div></form></div>';
+        return c;
+      }
+      c = '<div class="job-card">';
+      c += '<div class="job-head"><div><div class="log-venue">'+esc(m.item)+'</div>';
+      c += '<div class="hint" style="margin-top:2px">'+esc(fmtDay(m.date||m.createdAt))+(m.venue?' &middot; '+esc(m.venue):' &middot; no job noted yet')+'</div>';
+      c += '</div>';
+      c += '<span class="pill pill-success mono">$'+Number(m.cost||0).toFixed(2)+'</span>';
+      c += '</div>';
+      c += '<div class="log-foot" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">';
+      if (opts.assigned){
+        c += '<button type="button" class="btn btn-outline btn-sm" data-unassign-material="'+esc(m.id)+'">Move back to to-sort</button>';
+      } else {
+        c += '<button type="button" class="btn btn-primary btn-sm" data-assign-material="'+esc(m.id)+'">&#10003; Assigned</button>';
+      }
+      c += '<button type="button" class="btn btn-ghost btn-sm" data-edit-material="'+esc(m.id)+'">Edit</button>';
+      c += '<button type="button" class="btn btn-ghost btn-sm" style="color:#b3261e; margin-left:auto" data-ask-trash-material="'+esc(m.id)+'">Delete</button>';
+      c += '</div>';
+      if (state.trashConfirmMaterialId === m.id){
+        c += '<div class="msg msg-error" style="margin-top:10px">Delete this entry? It\'ll move to the Trash tab, where you can restore it any time.</div>';
+        c += '<div style="display:flex; gap:10px; margin-top:10px;">' +
+          '<button type="button" class="btn btn-primary btn-sm" style="background:#b3261e; border-color:#b3261e;" data-confirm-trash-material="'+esc(m.id)+'">Yes, delete it</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-trash-material">Cancel</button>' +
+        '</div>';
+      }
+      c += '</div>';
+      return c;
+    }
+
+    html += '<div class="card">';
+    html += '<div class="section-title" style="font-size:17px">To sort ('+toSort.length+')</div>';
+    if (toSort.length) html += '<p class="section-sub" style="margin-top:4px">Total: <span class="mono">$'+toSortTotal.toFixed(2)+'</span></p>';
+    if (!toSort.length){ html += '<p class="empty-note" style="margin-top:10px">Nothing waiting to be sorted.</p>'; }
+    html += '</div>';
+    toSort.forEach(function(m){ html += materialCard(m, {assigned:false}); });
+
+    if (assigned.length){
+      html += '<div class="card"><div class="section-title" style="font-size:17px">Assigned ('+assigned.length+')</div>' +
+        '<p class="section-sub" style="margin-top:4px">Total: <span class="mono">$'+assignedTotal.toFixed(2)+'</span></p></div>';
+      assigned.forEach(function(m){ html += materialCard(m, {assigned:true}); });
+    }
+
+    return html;
+  }
+
+  function onSubmitMaterialForm(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var item = f.item.value.trim();
+    var costRaw = f.cost.value.trim();
+    var cost = parseFloat(costRaw);
+    var date = f.date.value || todayStr();
+    var venue = f.venue.value.trim();
+
+    if (!item || costRaw === "" || isNaN(cost) || cost < 0){
+      state.materialFormMsg = {type:"error", text:"Fill in who it was from and a valid cost."};
+      render(); return;
+    }
+
+    state.materialFormBusy = true; state.materialFormMsg = null; render();
+    db.collection("materials").add({
+      item: item, cost: Math.round(cost*100)/100, date: date, venue: venue,
+      assigned: false, createdBy: (state.session && state.session.name) || "",
+      createdAt: new Date().toISOString(),
+    }).then(function(){
+      state.materialFormBusy = false;
+      toast("Added to the materials list");
+      render();
+    }).catch(function(){
+      state.materialFormBusy = false;
+      state.materialFormMsg = {type:"error", text:"Couldn't save that — try again."};
+      render();
+    });
+  }
+
+  function onSubmitEditMaterial(e, id){
+    e.preventDefault();
+    if (!db || !id) return;
+    var f = e.target;
+    var item = f.item.value.trim();
+    var costRaw = f.cost.value.trim();
+    var cost = parseFloat(costRaw);
+    var date = f.date.value || todayStr();
+    var venue = f.venue.value.trim();
+    if (!item || costRaw === "" || isNaN(cost) || cost < 0){
+      toast("Fill in who it was from and a valid cost.");
+      return;
+    }
+    db.collection("materials").doc(id).update({ item: item, cost: Math.round(cost*100)/100, date: date, venue: venue })
+      .then(function(){ state.editingMaterialId = null; toast("Saved"); render(); })
+      .catch(function(){ toast("Couldn't save that — try again."); });
+  }
+
+  function setMaterialAssigned(id, assignedVal){
+    if (!db || !id) return;
+    db.collection("materials").doc(id).update({ assigned: assignedVal })
+      .then(function(){ toast(assignedVal ? "Marked assigned" : "Moved back to to-sort"); render(); })
+      .catch(function(){ toast("Couldn't update that — try again."); });
+  }
+
+  function trashMaterial(id){
+    if (!db || !id) return;
+    db.collection("materials").doc(id).update({ trashed: true, trashedAt: new Date().toISOString() })
+      .then(function(){
+        toast("Deleted");
+        state.trashConfirmMaterialId = null;
+        render();
+      }).catch(function(){ toast("Couldn't delete that — try again."); });
+  }
+
+  function restoreMaterial(id){
+    if (!db || !id) return;
+    db.collection("materials").doc(id).update({ trashed: false })
+      .then(function(){ toast("Restored"); render(); })
+      .catch(function(){ toast("Couldn't restore that — try again."); });
+  }
+
   // ---------- Subcontractors: outside people who do work for us but aren't
   // on the crew roster and don't log in — Grace logs their jobs herself:
   // name, job details, what they charged. Separate from crew timesheets on
@@ -2401,10 +2574,12 @@
     trashedSubJobs.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
     var trashedSchedule = state.schedule.filter(function(s){ return s.trashed; });
     trashedSchedule.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
+    var trashedMaterials = state.materials.filter(function(m){ return m.trashed; });
+    trashedMaterials.sort(function(a,b){ return (b.trashedAt||"").localeCompare(a.trashedAt||""); });
 
     var html = '<div class="card">';
-    html += '<div class="section-title">Trash</div><p class="section-sub">Jobs, visit entries, leave days, subcontractor jobs and calendar entries moved here are hidden everywhere else but never deleted for good — restore any of them any time.</p>';
-    if (trashed.length===0 && trashedLeave.length===0 && trashedLogs.length===0 && trashedSubJobs.length===0 && trashedSchedule.length===0){ html += '<p class="empty-note">Nothing in the trash.</p>'; }
+    html += '<div class="section-title">Trash</div><p class="section-sub">Jobs, visit entries, leave days, subcontractor jobs, materials and calendar entries moved here are hidden everywhere else but never deleted for good — restore any of them any time.</p>';
+    if (trashed.length===0 && trashedLeave.length===0 && trashedLogs.length===0 && trashedSubJobs.length===0 && trashedSchedule.length===0 && trashedMaterials.length===0){ html += '<p class="empty-note">Nothing in the trash.</p>'; }
     html += '</div>';
 
     trashed.forEach(function(j){
@@ -2449,6 +2624,15 @@
       trashedSchedule.forEach(function(s){
         html += '<div class="crew-row"><div class="info"><div class="name">'+esc(s.employeeName)+'</div><div class="email">'+esc(s.venue)+' &middot; '+esc(fmtDay(s.date))+'</div></div>' +
           '<button type="button" class="btn btn-outline btn-sm" data-restore-schedule="'+esc(s.id)+'">Restore</button></div>';
+      });
+      html += '</div>';
+    }
+
+    if (trashedMaterials.length){
+      html += '<div class="card"><div class="section-title" style="font-size:17px">Deleted materials</div>';
+      trashedMaterials.forEach(function(m){
+        html += '<div class="crew-row"><div class="info"><div class="name">'+esc(m.item)+'</div><div class="email">'+esc(fmtDay(m.date||m.createdAt))+(m.venue?' &middot; '+esc(m.venue):'')+' &middot; $'+Number(m.cost||0).toFixed(2)+'</div></div>' +
+          '<button type="button" class="btn btn-outline btn-sm" data-restore-material="'+esc(m.id)+'">Restore</button></div>';
       });
       html += '</div>';
     }
@@ -3311,6 +3495,86 @@
     root.querySelectorAll("[data-restore-sub-job]").forEach(function(b){ b.addEventListener("click", function(){
       restoreSubJob(b.getAttribute("data-restore-sub-job"));
     }); });
+
+    // ---- Materials ----
+    var materialForm = document.getElementById("material-form");
+    if (materialForm) materialForm.addEventListener("submit", onSubmitMaterialForm);
+
+    var materialItemInput = document.getElementById("material-item-input");
+    var materialItemSuggestions = document.getElementById("material-item-suggestions");
+    if (materialItemInput && materialItemSuggestions){
+      var knownMaterialItems = uniqueMaterialItems();
+      var showMaterialItemMatches = function(){
+        var q = materialItemInput.value.trim().toLowerCase();
+        if (!q){ materialItemSuggestions.hidden = true; materialItemSuggestions.innerHTML = ""; return; }
+        var matches = knownMaterialItems.filter(function(v){ return v.toLowerCase().indexOf(q) !== -1; }).slice(0,8);
+        if (!matches.length){ materialItemSuggestions.hidden = true; materialItemSuggestions.innerHTML = ""; return; }
+        materialItemSuggestions.innerHTML = matches.map(function(v){ return '<button type="button">'+esc(v)+'</button>'; }).join("");
+        materialItemSuggestions.hidden = false;
+      };
+      materialItemInput.addEventListener("input", showMaterialItemMatches);
+      materialItemInput.addEventListener("focus", showMaterialItemMatches);
+      materialItemSuggestions.addEventListener("mousedown", function(e){
+        var btn = e.target.closest("button");
+        if (!btn) return;
+        e.preventDefault();
+        materialItemInput.value = btn.textContent;
+        materialItemSuggestions.hidden = true; materialItemSuggestions.innerHTML = "";
+      });
+      materialItemInput.addEventListener("blur", function(){ setTimeout(function(){ materialItemSuggestions.hidden = true; }, 120); });
+    }
+
+    var materialVenueInput = document.getElementById("material-venue-input");
+    var materialVenueSuggestions = document.getElementById("material-venue-suggestions");
+    if (materialVenueInput && materialVenueSuggestions){
+      var knownMaterialVenues = uniqueVenues();
+      var showMaterialVenueMatches = function(){
+        var q = materialVenueInput.value.trim().toLowerCase();
+        if (!q){ materialVenueSuggestions.hidden = true; materialVenueSuggestions.innerHTML = ""; return; }
+        var matches = knownMaterialVenues.filter(function(v){ return v.toLowerCase().indexOf(q) !== -1; }).slice(0,8);
+        if (!matches.length){ materialVenueSuggestions.hidden = true; materialVenueSuggestions.innerHTML = ""; return; }
+        materialVenueSuggestions.innerHTML = matches.map(function(v){ return '<button type="button">'+esc(v)+'</button>'; }).join("");
+        materialVenueSuggestions.hidden = false;
+      };
+      materialVenueInput.addEventListener("input", showMaterialVenueMatches);
+      materialVenueInput.addEventListener("focus", showMaterialVenueMatches);
+      materialVenueSuggestions.addEventListener("mousedown", function(e){
+        var btn = e.target.closest("button");
+        if (!btn) return;
+        e.preventDefault();
+        materialVenueInput.value = btn.textContent;
+        materialVenueSuggestions.hidden = true; materialVenueSuggestions.innerHTML = "";
+      });
+      materialVenueInput.addEventListener("blur", function(){ setTimeout(function(){ materialVenueSuggestions.hidden = true; }, 120); });
+    }
+
+    root.querySelectorAll("[data-assign-material]").forEach(function(b){ b.addEventListener("click", function(){
+      setMaterialAssigned(b.getAttribute("data-assign-material"), true);
+    }); });
+    root.querySelectorAll("[data-unassign-material]").forEach(function(b){ b.addEventListener("click", function(){
+      setMaterialAssigned(b.getAttribute("data-unassign-material"), false);
+    }); });
+    root.querySelectorAll("[data-edit-material]").forEach(function(b){ b.addEventListener("click", function(){
+      state.editingMaterialId = b.getAttribute("data-edit-material"); render();
+    }); });
+    root.querySelectorAll("[data-cancel-edit-material]").forEach(function(b){ b.addEventListener("click", function(){
+      state.editingMaterialId = null; render();
+    }); });
+    root.querySelectorAll("[data-edit-material-form]").forEach(function(f){ f.addEventListener("submit", function(e){
+      onSubmitEditMaterial(e, f.getAttribute("data-edit-material-form"));
+    }); });
+    root.querySelectorAll("[data-ask-trash-material]").forEach(function(b){ b.addEventListener("click", function(){
+      state.trashConfirmMaterialId = b.getAttribute("data-ask-trash-material"); render();
+    }); });
+    root.querySelectorAll("[data-action=\"cancel-trash-material\"]").forEach(function(b){ b.addEventListener("click", function(){
+      state.trashConfirmMaterialId = null; render();
+    }); });
+    root.querySelectorAll("[data-confirm-trash-material]").forEach(function(b){ b.addEventListener("click", function(){
+      trashMaterial(b.getAttribute("data-confirm-trash-material"));
+    }); });
+    root.querySelectorAll("[data-restore-material]").forEach(function(b){ b.addEventListener("click", function(){
+      restoreMaterial(b.getAttribute("data-restore-material"));
+    }); });
   }
 
   function onSubmitSetup(e){
@@ -3773,6 +4037,11 @@
 
       db.collection("subcontractor-jobs").orderBy("createdAt","desc").limit(1000).onSnapshot(function(snap){
         state.subcontractorJobs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+        render();
+      }, onListenerError);
+
+      db.collection("materials").orderBy("createdAt","desc").limit(1000).onSnapshot(function(snap){
+        state.materials = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
         render();
       }, onListenerError);
 
