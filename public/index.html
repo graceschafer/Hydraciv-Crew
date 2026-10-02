@@ -1184,6 +1184,9 @@
     var latestLog = jobLogsFor(j.id)[0];
     var html = '<div class="job-card job-card-tap" data-view-job="'+esc(j.id)+'">';
     html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
+    if (latestLog && latestLog.date){
+      html += '<div class="hint mono" style="margin-top:1px;">'+esc(fmtDay(latestLog.date))+'</div>';
+    }
     if (j.assignedEmployees && j.assignedEmployees.length){
       html += '<div class="chips" style="margin-top:6px">'+j.assignedEmployees.map(function(n){return '<span class="pill pill-neutral">'+esc(n)+'</span>';}).join("")+'</div>';
     }
