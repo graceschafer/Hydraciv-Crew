@@ -386,6 +386,7 @@
     myScheduleFormOpen: false, myScheduleFormBusy: false, myScheduleFormMsg: null,
     viewingScheduleId: null, trashConfirmScheduleId: null,
     calendarMonthOffset: 0, calendarSelectedDate: null,
+    myCalendarMonthOffset: 0, myCalendarSelectedDate: null,
   };
 
   function esc(s){
@@ -2258,6 +2259,14 @@
       .sort(function(a,b){ return (a.employeeName||"").localeCompare(b.employeeName||""); });
   }
 
+  // Same idea as scheduleEntriesFor, but just one person's own entries — for
+  // their personal calendar, where showing their own name on every chip
+  // would be redundant, so the venue is what goes on the chip instead.
+  function myScheduleEntriesFor(date, me){
+    return state.schedule.filter(function(s){ return !s.trashed && s.date === date && s.employeeName === me; })
+      .sort(function(a,b){ return (a.venue||"").localeCompare(b.venue||""); });
+  }
+
   // Every site that's ever been typed into the Assign form, most-recent
   // first, deduplicated — lets the venue field autocomplete a repeat address
   // instead of Grace or Jayden retyping it. Purely a typing convenience;
@@ -2488,12 +2497,11 @@
   // anyone else's, and has nothing to do with logging — see
   // renderScheduleDetail above.
   function renderMyCalendar(me){
-    var mine = state.schedule.filter(function(s){ return !s.trashed && s.employeeName === me; })
-      .slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+    var info = monthInfo(state.myCalendarMonthOffset);
     var html = '<div class="card">';
     html += '<button type="button" class="btn btn-ghost" data-action="back-to-list" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
     html += '<div class="section-title">Your calendar</div>';
-    html += '<p class="section-sub">Jobs assigned to you, plus anything you\'ve added yourself to keep track — tap one to see it. Log it from your job list as normal once it\'s done.</p>';
+    html += '<p class="section-sub">Jobs assigned to you, plus anything you\'ve added yourself to keep track — tap a day to see what\'s on. Log it from your job list as normal once it\'s done.</p>';
 
     if (!state.myScheduleFormOpen){
       html += '<button type="button" class="btn btn-outline btn-block" data-action="open-my-schedule-form" style="margin-bottom:4px">+ Add something to your calendar</button>';
@@ -2509,19 +2517,52 @@
       html += '</div></form>';
     }
 
-    if (!mine.length){ html += '<p class="empty-note">Nothing scheduled.</p>'; }
-    else {
-      mine.forEach(function(s){
-        html += '<div class="job-card job-card-tap" data-view-schedule="'+esc(s.id)+'">';
-        html += '<div class="job-head"><div><div class="log-venue">'+esc(s.venue)+'</div>';
-        html += '<div class="hint" style="margin-top:2px">'+esc(fmtDay(s.date))+'</div></div>';
-        if (s.selfAdded) html += '<span class="pill pill-neutral">Added by you</span>';
-        html += '</div>';
-        html += '<div class="job-card-cta">Tap for details <span aria-hidden="true">&rarr;</span></div>';
-        html += '</div>';
-      });
-    }
+    html += '<div style="display:flex; align-items:center; justify-content:space-between; margin-top:14px;">';
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-mycal-month="-1">&larr;</button>';
+    html += '<div style="font-weight:800; font-size:16px; font-family:\'Big Shoulders Display\'">'+esc(info.label)+'</div>';
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-mycal-month="1">&rarr;</button>';
     html += '</div>';
+    if (state.myCalendarMonthOffset !== 0){
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-action="mycal-month-reset" style="margin-top:4px">Back to this month</button>';
+    }
+
+    html += '<div class="cal-grid" style="margin-top:12px">';
+    ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].forEach(function(dow){ html += '<div class="cal-dow">'+dow+'</div>'; });
+    for (var i=0;i<info.startWeekday;i++){ html += '<div class="cal-cell blank"></div>'; }
+    var todayNow = todayStr();
+    for (var day=1; day<=info.daysInMonth; day++){
+      var dateStr = info.year+"-"+pad2(info.month+1)+"-"+pad2(day);
+      var entries = myScheduleEntriesFor(dateStr, me);
+      var isToday = dateStr === todayNow;
+      var isSel = state.myCalendarSelectedDate === dateStr;
+      html += '<div class="cal-cell'+(isToday?" today":"")+(isSel?" sel":"")+'" data-mycal-day="'+dateStr+'">';
+      html += '<div class="num">'+day+'</div>';
+      if (entries.length){
+        html += '<div class="cal-chips">';
+        entries.slice(0,2).forEach(function(e){ html += '<div class="cal-chip">'+esc(e.venue)+'</div>'; });
+        if (entries.length>2) html += '<div class="cal-more">+'+(entries.length-2)+' more</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+    html += '</div></div>';
+
+    if (state.myCalendarSelectedDate){
+      var dayEntries = myScheduleEntriesFor(state.myCalendarSelectedDate, me);
+      html += '<div class="card"><div class="section-title" style="font-size:16px">'+esc(fmtDay(state.myCalendarSelectedDate))+'</div>';
+      if (!dayEntries.length){ html += '<p class="empty-note" style="margin-top:8px">Nothing scheduled this day.</p>'; }
+      else {
+        dayEntries.forEach(function(s){
+          html += '<div class="job-card job-card-tap" data-view-schedule="'+esc(s.id)+'" style="margin-top:10px">';
+          html += '<div class="job-head"><div><div class="log-venue">'+esc(s.venue)+'</div></div>';
+          if (s.selfAdded) html += '<span class="pill pill-neutral">Added by you</span>';
+          html += '</div>';
+          html += '<div class="job-card-cta">Tap for details <span aria-hidden="true">&rarr;</span></div>';
+          html += '</div>';
+        });
+      }
+      html += '</div>';
+    }
     return html;
   }
 
@@ -3386,6 +3427,19 @@
     root.querySelectorAll("[data-cal-day]").forEach(function(b){ b.addEventListener("click", function(){
       var d = b.getAttribute("data-cal-day");
       state.calendarSelectedDate = (state.calendarSelectedDate === d) ? null : d;
+      render();
+    }); });
+
+    root.querySelectorAll("[data-mycal-month]").forEach(function(b){ b.addEventListener("click", function(){
+      state.myCalendarMonthOffset += parseInt(b.getAttribute("data-mycal-month"),10);
+      state.myCalendarSelectedDate = null;
+      render();
+    }); });
+    var myCalMonthResetBtn = root.querySelector('[data-action="mycal-month-reset"]');
+    if (myCalMonthResetBtn) myCalMonthResetBtn.addEventListener("click", function(){ state.myCalendarMonthOffset = 0; state.myCalendarSelectedDate = null; render(); });
+    root.querySelectorAll("[data-mycal-day]").forEach(function(b){ b.addEventListener("click", function(){
+      var d = b.getAttribute("data-mycal-day");
+      state.myCalendarSelectedDate = (state.myCalendarSelectedDate === d) ? null : d;
       render();
     }); });
 
