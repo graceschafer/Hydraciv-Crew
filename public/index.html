@@ -516,6 +516,14 @@
   function nonInvoicedJobs(){ return visibleJobs().filter(function(j){ return j.status !== "invoiced"; }); }
   function openJobs(){ return nonInvoicedJobs().filter(function(j){ return j.open !== false; }); }
 
+  // Shared "newest activity first" sort for every job list on the Management
+  // side — lastUpdatedAt gets touched every time a visit is logged against a
+  // job (see afterLog), so this surfaces whatever's most recently had
+  // something happen on it, not just whatever was created most recently.
+  function byRecentJobActivity(a, b){
+    return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||"");
+  }
+
   // ---------- render ----------
   function render(){
     var html = "";
@@ -1832,16 +1840,10 @@
       // jobs Grace wants to keep an eye on separately from one-off single-visit
       // jobs, right up until she's marked them complete. It doesn't remove
       // them from the other filters — it's just an easy way to find them all
-      // in one place. Open ones surface first, completed ones last; once one
-      // is invoiced it moves off this list into the Invoiced tab.
+      // in one place. Once one is invoiced it moves off this list into the
+      // Invoiced tab.
       if (state.jobsStatusFilter === "merged"){
         list = list.filter(function(j){ return j.isMerged; });
-        list = list.slice().sort(function(a,b){
-          var rank = function(j){ return j.status==="completed" ? 1 : 0; };
-          var r = rank(a) - rank(b);
-          if (r !== 0) return r;
-          return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||"");
-        });
       }
       html += '<div class="seg" style="margin:14px 0" data-seg="jobsFilter">' +
         filters.map(function(f){
@@ -1850,6 +1852,7 @@
         }).join("") +
       '</div>';
     }
+    list = list.slice().sort(byRecentJobActivity);
 
     html += '</div>';
     if (list.length===0){ html += '<div class="card"><p class="empty-note">'+(q?"No jobs match.":"No jobs yet.")+'</p></div>'; }
@@ -1867,7 +1870,7 @@
     var sel = state.byCrewEmployee || (crew[0] && crew[0].name) || null;
 
     var html = '<div class="card">';
-    html += '<div class="section-title">By crew</div><p class="section-sub">Pick a crew member to see just their jobs — ongoing ones first, completed pushed to the bottom. Invoiced jobs live in the Invoiced tab.</p>';
+    html += '<div class="section-title">By crew</div><p class="section-sub">Pick a crew member to see just their jobs, newest first. Invoiced jobs live in the Invoiced tab.</p>';
     html += '<div class="chips">' + crew.map(function(c){
       return '<button class="chip'+(sel===c.name?" on":"")+'" data-bycrew-emp="'+esc(c.name)+'">'+esc(c.name)+'</button>';
     }).join("") + '</div>';
@@ -1876,12 +1879,7 @@
     if (!sel){ html += '<div class="card"><p class="empty-note">Add crew first.</p></div>'; return html; }
 
     var mine = nonInvoicedJobs().filter(function(j){ return (j.assignedEmployees||[]).indexOf(sel) !== -1; });
-    var rank = function(j){ return j.status==="completed" ? 1 : 0; };
-    mine.sort(function(a,b){
-      var r = rank(a) - rank(b);
-      if (r !== 0) return r;
-      return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||"");
-    });
+    mine.sort(byRecentJobActivity);
 
     html += '<div class="card">';
     html += '<div class="section-title" style="font-size:17px">' + esc(sel) + "'s jobs</div>";
@@ -1897,8 +1895,7 @@
   // ---------- For Drew: jobs sent through for pricing ----------
   function renderForDrew(){
     var awaiting = nonInvoicedJobs().filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
-    var byRecent = function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); };
-    awaiting.sort(byRecent);
+    awaiting.sort(byRecentJobActivity);
 
     var html = '<div class="card">';
     html += '<div class="section-title">For Drew to price</div><p class="section-sub">Jobs sent through for Drew (or anyone in management) to price.</p>';
@@ -1915,13 +1912,11 @@
   // ---------- Priced: has a price, not yet marked Invoiced ----------
   function renderPricedJobs(){
     var priced = nonInvoicedJobs().filter(function(j){ return j.invoiceAmount != null && j.invoiceAmount !== ""; });
-    // Oldest-waiting first — the ones most at risk of being forgotten belong
-    // at the top, not buried under whatever was priced most recently.
     var withAge = priced.map(function(j){ return {job:j, age: daysSince(j.pricedAt || j.lastUpdatedAt || j.createdAt)}; });
-    withAge.sort(function(a,b){ return (b.age==null?-1:b.age) - (a.age==null?-1:a.age); });
+    withAge.sort(function(a,b){ return byRecentJobActivity(a.job, b.job); });
 
     var html = '<div class="card">';
-    html += '<div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Invoiced tab. Oldest waiting first.</p>';
+    html += '<div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Invoiced tab. Newest first — the "waiting X days" note still flags ones at risk of being forgotten.</p>';
     if (priced.length===0){ html += '<p class="empty-note">Nothing priced and waiting right now.</p>'; }
     html += '</div>';
     if (withAge.length){
