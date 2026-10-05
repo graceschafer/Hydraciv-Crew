@@ -426,7 +426,10 @@
     if (isNaN(then)) return null;
     return Math.max(0, Math.floor((Date.now() - then) / 86400000));
   }
-  function numHours(v){ var n = parseFloat(v); return isNaN(n) ? 0 : n; }
+  // Accepts a comma as the decimal point too (e.g. "2,5") — parseFloat on
+  // its own stops at the comma and silently reads that as "2", quietly
+  // dropping the ".5" whenever someone types hours that way.
+  function numHours(v){ var n = parseFloat(String(v==null?"":v).replace(",", ".")); return isNaN(n) ? 0 : n; }
 
   // Crew can only edit/delete a visit they logged while its date falls in
   // the current work week OR the one just before it — a short grace window
@@ -3740,7 +3743,9 @@
     var mode = f.getAttribute("data-mode");
     var jobDescription = f.jobDescription.value.trim();
     var date = f.date.value;
-    var hours = f.hours.value.trim();
+    // Swap a decimal comma for a point (e.g. "2,5" -> "2.5") so it's stored
+    // the way it displays and totals everywhere else — not just when summed.
+    var hours = f.hours.value.trim().replace(",", ".");
     var timeRange = f.timeRange ? f.timeRange.value.trim() : "";
     var jobStatusOn = root.querySelector('#job-form [data-seg="completed"] .on');
     var jobStatusVal = jobStatusOn ? jobStatusOn.getAttribute("data-val") : "no";
