@@ -554,6 +554,14 @@
     html += '<div class="footer-note">Hydraciv Crew Portal — job sheets sync live' + (canManage() ? " to Management." : ".") + '</div>';
     root.innerHTML = html;
     bindEvents();
+    // If a form submit just failed validation (wrong/missing field, etc.),
+    // the error banner renders at the TOP of the form — on a long form like
+    // the job sheet, that's off-screen above wherever the Save button was
+    // tapped from, so it was easy to tap Save, see nothing happen, and walk
+    // away thinking it saved when really it silently didn't. Jump straight
+    // to the message so that's no longer invisible.
+    var errBanner = root.querySelector(".msg-error");
+    if (errBanner) errBanner.scrollIntoView({behavior:"smooth", block:"center"});
   }
 
   function renderHero(){
