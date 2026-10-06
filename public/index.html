@@ -351,6 +351,25 @@
   function saveSession(s){ try{ sessionStorage.setItem(LS_SESSION, JSON.stringify(s)); }catch(e){} }
   function clearSession(){ try{ sessionStorage.removeItem(LS_SESSION); }catch(e){} }
 
+  // ---------- job drafts (crew-side, device-local only) ----------
+  // Drafts never touch Firestore and never go through db/onSnapshot — they
+  // live only in THIS browser's localStorage, scoped per crew member's name.
+  // That's deliberate: it means a half-filled-in job sheet structurally
+  // cannot reach management (or anyone else's device) until the crew member
+  // actually taps Submit. localStorage (not sessionStorage) on purpose here,
+  // the opposite of the login session above — a draft should still be there
+  // tomorrow even if the tab/app was fully closed overnight.
+  function draftsKey(me){ return "hydraciv-drafts:" + me; }
+  function loadDrafts(me){
+    try{
+      var raw = localStorage.getItem(draftsKey(me));
+      var list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    }catch(e){ return []; }
+  }
+  function saveDrafts(me, list){ try{ localStorage.setItem(draftsKey(me), JSON.stringify(list)); }catch(e){} }
+  function discardDraft(me, draftId){ saveDrafts(me, loadDrafts(me).filter(function(d){ return d.id !== draftId; })); }
+
   var state = {
     crew: [], jobs: [], jobLogs: [], logins: [],
     session: loadSession(),
@@ -387,6 +406,7 @@
     viewingScheduleId: null, trashConfirmScheduleId: null,
     calendarMonthOffset: 0, calendarSelectedDate: null,
     myCalendarMonthOffset: 0, myCalendarSelectedDate: null,
+    continuingDraftId: null, trashConfirmDraftId: null,
   };
 
   function esc(s){
@@ -666,12 +686,17 @@
     var html = "";
 
     if (state.logView === "new"){
-      html += renderJobForm({mode:"new"});
+      var newDraft = state.continuingDraftId ? loadDrafts(me).filter(function(d){ return d.id === state.continuingDraftId; })[0] : null;
+      html += renderJobForm({mode:"new", draft:newDraft});
       return html + renderRecentForMe(me);
     }
     if (state.logView === "update" && state.updateJobId){
       var job = state.jobs.filter(function(j){ return j.id === state.updateJobId; })[0];
-      if (job){ html += renderJobForm({mode:"update", job:job}); return html + renderRecentForMe(me); }
+      if (job){
+        var updateDraft = state.continuingDraftId ? loadDrafts(me).filter(function(d){ return d.id === state.continuingDraftId; })[0] : null;
+        html += renderJobForm({mode:"update", job:job, draft:updateDraft});
+        return html + renderRecentForMe(me);
+      }
     }
     if (state.logView === "leave"){
       html += renderLeaveForm({mode:"new"});
@@ -687,6 +712,44 @@
     }
 
     var myScheduledCount = state.schedule.filter(function(s){ return !s.trashed && s.employeeName === me; }).length;
+
+    // Drafts only ever live on THIS device (localStorage, not Firestore —
+    // see draftsKey above), so they stay out of management's view entirely
+    // until submitted for real.
+    var myDrafts = loadDrafts(me);
+    if (myDrafts.length){
+      html += '<div class="card">';
+      html += '<div class="section-title">Drafts (' + myDrafts.length + ')</div>';
+      html += '<p class="section-sub">Saved on this device only &mdash; management can\'t see these until you submit or discard them.</p>';
+      myDrafts.forEach(function(d){
+        var draftTitle;
+        if (d.mode === "update"){
+          var dJob = state.jobs.filter(function(x){ return x.id === d.jobId; })[0];
+          draftTitle = dJob ? esc(dJob.venue) : "Update to a job";
+        } else {
+          draftTitle = d.venue ? esc(d.venue) : "New job (no venue yet)";
+        }
+        html += '<div class="job-card" style="margin-top:10px">';
+        html += '<div class="job-head"><div>';
+        html += '<div class="log-venue">' + draftTitle + '</div>';
+        html += '<div class="hint">' + (d.jobDescription ? esc(d.jobDescription) : "Nothing written yet") + (d.date ? ' &middot; ' + fmtShort(d.date) : '') + '</div>';
+        html += '</div></div>';
+        if (state.trashConfirmDraftId === d.id){
+          html += '<div class="log-foot">';
+          html += '<span class="hint" style="margin-right:auto">Discard this draft?</span>';
+          html += '<button type="button" class="btn btn-primary btn-sm" style="background:#b3261e; border-color:#b3261e;" data-confirm-discard-draft="'+esc(d.id)+'">Yes, discard it</button>';
+          html += '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-discard-draft">Cancel</button>';
+          html += '</div>';
+        } else {
+          html += '<div class="log-foot">';
+          html += '<button type="button" class="btn btn-primary btn-sm" data-continue-draft="'+esc(d.id)+'">Continue</button>';
+          html += '<button type="button" class="btn btn-ghost btn-sm" style="color:#b3261e; margin-left:auto" data-ask-discard-draft="'+esc(d.id)+'">Discard</button>';
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+    }
 
     html += '<div class="card">';
     html += '<div class="section-title">Your jobs</div>';
@@ -745,6 +808,11 @@
   function renderJobForm(opts){
     var job = opts.job, log = opts.log || {};
     var isEdit = opts.mode === "edit";
+    // Editing an already-submitted entry prefills from that entry (log); a
+    // brand-new or continued-update job sheet prefills from a saved draft
+    // instead, when there is one — same field names either way, so every
+    // "isEdit ? log.X : default" below also doubles as "resume my draft".
+    var prefill = isEdit ? log : (opts.draft || null);
     var titles = {"new":"Start a new job", "update":"Add an update", "edit":"Edit this update"};
     var html = '<div class="card">';
     html += '<div class="section-title">'+titles[opts.mode]+'</div>';
@@ -758,30 +826,31 @@
 
     html += '<form id="job-form" data-mode="'+opts.mode+'" '+(job?('data-job-id="'+esc(job.id)+'"'):'')+' '+(isEdit?('data-log-id="'+esc(log.id)+'"'):'')+'>';
 
-    var othersBeforeVal = isEdit ? !!log.othersBefore : false;
+    var othersBeforeVal = prefill ? !!prefill.othersBefore : false;
     html += '<div class="field"><label>Has anyone besides yourself been to this job before?</label><div class="seg" data-seg="othersBefore">' +
       '<button type="button" data-val="no" class="'+(!othersBeforeVal?"on":"")+'">No</button>' +
       '<button type="button" data-val="yes" class="'+(othersBeforeVal?"on":"")+'">Yes</button>' +
     '</div></div>';
 
     if (opts.mode === "new"){
-      html += field("Venue / job site", '<div class="autocomplete-wrap"><input type="text" id="job-venue-input" name="venue" placeholder="e.g. 14 Marlow St — pump station" autocomplete="off" required>' +
+      html += field("Venue / job site", '<div class="autocomplete-wrap"><input type="text" id="job-venue-input" name="venue" value="'+(prefill?esc(prefill.venue||""):"")+'" placeholder="e.g. 14 Marlow St — pump station" autocomplete="off" required>' +
         '<div id="venue-suggestions" class="autocomplete-list" hidden></div></div>');
+      var draftClient = prefill ? (prefill.client||"") : "";
       html += '<div class="field"><label>Client</label><div class="seg" data-seg="client">' +
         CLIENT_OPTIONS.map(function(c){
-          return '<button type="button" data-val="'+esc(c)+'">'+esc(c)+'</button>';
+          return '<button type="button" data-val="'+esc(c)+'" class="'+(draftClient===c?"on":"")+'">'+esc(c)+'</button>';
         }).join("") +
       '</div></div>';
     }
 
-    html += field("Job description", '<textarea name="jobDescription" placeholder="What is/was the work" required>'+(isEdit?esc(log.jobDescription||""):"")+'</textarea>');
+    html += field("Job description", '<textarea name="jobDescription" placeholder="What is/was the work" required>'+(prefill?esc(prefill.jobDescription||""):"")+'</textarea>');
 
     html += '<div class="row2">';
-    html += field("Date", '<input type="date" name="date" value="'+esc(isEdit?(log.date||todayStr()):todayStr())+'" required>');
-    html += field("Hours worked", '<input type="text" name="hours" value="'+esc(isEdit?(log.hours||""):"")+'" placeholder="e.g. 6.5 or 6.5h" required>');
+    html += field("Date", '<input type="date" name="date" value="'+esc(prefill?(prefill.date||todayStr()):todayStr())+'" required>');
+    html += field("Hours worked", '<input type="text" name="hours" value="'+esc(prefill?(prefill.hours||""):"")+'" placeholder="e.g. 6.5 or 6.5h" required>');
     html += '</div>';
     html += '<div class="field"><label>Time</label>' +
-      '<input type="text" name="timeRange" value="'+(isEdit?esc(log.timeRange||""):"")+'" placeholder="e.g. 7am–10am">' +
+      '<input type="text" name="timeRange" value="'+(prefill?esc(prefill.timeRange||""):"")+'" placeholder="e.g. 7am–10am">' +
       '<p class="hint" style="margin:4px 0 0">Working past 3:30pm? Write the time — that\'s overtime and we need it for invoicing.</p>' +
     '</div>';
 
@@ -795,25 +864,25 @@
     // editing one of those forces a real answer instead of silently keeping
     // the old blank.
     var alsoOnsiteMode = "";
-    if (isEdit){
-      if (log.alsoOnsite === ALONE_TEXT) alsoOnsiteMode = "alone";
-      else if (log.alsoOnsite) alsoOnsiteMode = "with";
+    if (prefill){
+      if (prefill.alsoOnsite === ALONE_TEXT) alsoOnsiteMode = "alone";
+      else if (prefill.alsoOnsite) alsoOnsiteMode = "with";
     }
     html += '<div class="field"><label>Anyone else onsite?</label><div class="seg" data-seg="alsoOnsiteMode">' +
       '<button type="button" data-val="with" class="'+(alsoOnsiteMode==="with"?"on":"")+'">Someone else was there</button>' +
       '<button type="button" data-val="alone" class="'+(alsoOnsiteMode==="alone"?"on":"")+'">By myself &mdash; no one else</button>' +
     '</div></div>';
     html += '<div id="also-onsite-name-field" style="display:'+(alsoOnsiteMode==="with"?"block":"none")+'">' +
-      field("Who else?", '<input type="text" id="also-onsite-input" name="alsoOnsite" value="'+(alsoOnsiteMode==="with"?esc(log.alsoOnsite||""):"")+'" placeholder="e.g. Charlotte, Bob">') +
+      field("Who else?", '<input type="text" id="also-onsite-input" name="alsoOnsite" value="'+(alsoOnsiteMode==="with"?esc(prefill.alsoOnsite||""):"")+'" placeholder="e.g. Charlotte, Bob">') +
     '</div>';
 
-    html += field("Materials used", '<textarea name="materials" placeholder="e.g. 2x 25mm ball valves, 10m copper pipe">'+(isEdit?esc(log.materials||""):"")+'</textarea>');
+    html += field("Materials used", '<textarea name="materials" placeholder="e.g. 2x 25mm ball valves, 10m copper pipe">'+(prefill?esc(prefill.materials||""):"")+'</textarea>');
     // Management-only — crew just note who supplied the materials (e.g.
     // "Reece", "Pro"); Grace fills in what it actually cost once she has the
     // docket, so this never blocks crew from submitting the job sheet.
     if (isAdmin()){
       html += '<div class="field"><label>Materials cost ($, optional)</label>' +
-        '<input type="text" inputmode="decimal" name="materialsCost" value="'+(isEdit && log.materialsCost!=null?esc(log.materialsCost):"")+'" placeholder="e.g. 84.50">' +
+        '<input type="text" inputmode="decimal" name="materialsCost" value="'+(prefill && prefill.materialsCost!=null?esc(prefill.materialsCost):"")+'" placeholder="e.g. 84.50">' +
         '<p class="hint" style="margin:4px 0 0">From the docket — leave blank until you have it.</p>' +
       '</div>';
     }
@@ -825,7 +894,7 @@
     // so it should drop off their own Not Finished list without marking the
     // whole job closed for whoever picks it up next.
     var jobStatusVal = "yes";
-    if (isEdit){ jobStatusVal = log.crewDone ? "mine" : (log.completed ? "yes" : "no"); }
+    if (prefill){ jobStatusVal = prefill.crewDone ? "mine" : (prefill.completed ? "yes" : "no"); }
     html += '<div class="field"><label>Job status</label><div class="seg" data-seg="completed">' +
       '<button type="button" data-val="yes" class="'+(jobStatusVal==="yes"?"on":"")+'">Completed</button>' +
       '<button type="button" data-val="no" class="'+(jobStatusVal==="no"?"on":"")+'">Not finished</button>' +
@@ -833,25 +902,31 @@
     '</div></div>';
 
     html += '<div id="followup-fields" style="display:'+(jobStatusVal==="no"?"block":"none")+'">';
-    var returnUnsureVal = isEdit ? !!log.returnUnsure : false;
+    var returnUnsureVal = prefill ? !!prefill.returnUnsure : false;
     html += '<div class="field"><label>Estimated return date</label>' +
-      '<input type="date" id="estimated-return-input" name="estimatedReturn" value="'+esc(isEdit?(log.estimatedReturn||""):"")+'" '+(returnUnsureVal?"disabled":"")+'>' +
+      '<input type="date" id="estimated-return-input" name="estimatedReturn" value="'+esc(prefill?(prefill.estimatedReturn||""):"")+'" '+(returnUnsureVal?"disabled":"")+'>' +
       '<button type="button" id="return-unsure-btn" class="btn btn-outline btn-sm'+(returnUnsureVal?" on":"")+'" style="margin-top:6px" data-on="'+(returnUnsureVal?"1":"")+'">'+(returnUnsureVal?"✓ Not sure yet":"Not sure yet")+'</button>' +
       '<input type="hidden" name="returnUnsure" value="'+(returnUnsureVal?"1":"")+'">' +
     '</div>';
-    html += field("Work still to do", '<textarea name="remainingWork" placeholder="What\'s left to finish next visit">'+(isEdit?esc(log.remainingWork||""):"")+'</textarea>');
+    html += field("Work still to do", '<textarea name="remainingWork" placeholder="What\'s left to finish next visit">'+(prefill?esc(prefill.remainingWork||""):"")+'</textarea>');
     html += '</div>';
 
-    var handoffUnsureVal = isEdit ? !!log.handoffUnsure : false;
+    var handoffUnsureVal = prefill ? !!prefill.handoffUnsure : false;
     html += '<div id="handoff-fields" style="display:'+(jobStatusVal==="mine"?"block":"none")+'">';
     html += '<div class="field"><label>Who else is going back?</label>' +
-      '<input type="text" id="handoff-input" name="handoffTo" value="'+(isEdit?esc(log.handoffTo||""):"")+'" placeholder="e.g. Charlotte" '+(handoffUnsureVal?"disabled":"")+'>' +
+      '<input type="text" id="handoff-input" name="handoffTo" value="'+(prefill?esc(prefill.handoffTo||""):"")+'" placeholder="e.g. Charlotte" '+(handoffUnsureVal?"disabled":"")+'>' +
       '<button type="button" id="handoff-unsure-btn" class="btn btn-outline btn-sm'+(handoffUnsureVal?" on":"")+'" style="margin-top:6px" data-on="'+(handoffUnsureVal?"1":"")+'">'+(handoffUnsureVal?"✓ Unsure":"Unsure")+'</button>' +
       '<input type="hidden" name="handoffUnsure" value="'+(handoffUnsureVal?"1":"")+'">' +
     '</div>';
     html += '</div>';
 
     html += '<button type="submit" class="btn btn-primary btn-block" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Sending…":(isEdit?"Save changes":"Submit job sheet"))+'</button>';
+    // Edit mode is for a visit already sitting in Firestore — there's
+    // nothing to "draft" there, so this only shows for a fresh/update sheet.
+    if (!isEdit){
+      html += '<button type="button" id="save-draft-btn" class="btn btn-outline btn-block" style="margin-top:8px" '+(state.formBusy?"disabled":"")+'>Save as draft</button>';
+      html += '<p class="hint" style="margin:6px 0 0; text-align:center">Saved only on this device &mdash; management won\'t see it until you submit.</p>';
+    }
     html += '</form></div>';
     return html;
   }
@@ -3091,10 +3166,36 @@
 
     // job list actions
     var newJobBtn = root.querySelector('[data-action="new-job"]');
-    if (newJobBtn) newJobBtn.addEventListener("click", function(){ state.logView="new"; state.formMsg=null; render(); });
-    root.querySelectorAll("[data-add-update]").forEach(function(b){ b.addEventListener("click", function(){ state.logView="update"; state.updateJobId=b.getAttribute("data-add-update"); state.formMsg=null; render(); }); });
+    if (newJobBtn) newJobBtn.addEventListener("click", function(){ state.logView="new"; state.formMsg=null; state.continuingDraftId=null; render(); });
+    root.querySelectorAll("[data-add-update]").forEach(function(b){ b.addEventListener("click", function(){ state.logView="update"; state.updateJobId=b.getAttribute("data-add-update"); state.formMsg=null; state.continuingDraftId=null; render(); }); });
     var backBtn = root.querySelector('[data-action="back-to-list"]');
-    if (backBtn) backBtn.addEventListener("click", function(){ state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.myScheduleFormOpen=false; state.myScheduleFormMsg=null; render(); });
+    if (backBtn) backBtn.addEventListener("click", function(){ state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.myScheduleFormOpen=false; state.myScheduleFormMsg=null; state.continuingDraftId=null; render(); });
+
+    // drafts — saved only on this device (see draftsKey/loadDrafts above),
+    // never through db/Firestore, so these never touch management's view.
+    root.querySelectorAll("[data-continue-draft]").forEach(function(b){ b.addEventListener("click", function(){
+      var id = b.getAttribute("data-continue-draft");
+      var me = state.session.name;
+      var draft = loadDrafts(me).filter(function(d){ return d.id === id; })[0];
+      if (!draft) return;
+      state.continuingDraftId = id;
+      state.formMsg = null;
+      if (draft.mode === "update" && draft.jobId){ state.logView = "update"; state.updateJobId = draft.jobId; }
+      else { state.logView = "new"; }
+      render();
+    }); });
+    root.querySelectorAll("[data-ask-discard-draft]").forEach(function(b){ b.addEventListener("click", function(){
+      state.trashConfirmDraftId = b.getAttribute("data-ask-discard-draft"); render();
+    }); });
+    root.querySelectorAll('[data-action="cancel-discard-draft"]').forEach(function(b){ b.addEventListener("click", function(){
+      state.trashConfirmDraftId = null; render();
+    }); });
+    root.querySelectorAll("[data-confirm-discard-draft]").forEach(function(b){ b.addEventListener("click", function(){
+      discardDraft(state.session.name, b.getAttribute("data-confirm-discard-draft"));
+      state.trashConfirmDraftId = null;
+      toast("Draft discarded");
+      render();
+    }); });
     root.querySelectorAll("[data-edit-log]").forEach(function(b){ b.addEventListener("click", function(){ state.editLogId=b.getAttribute("data-edit-log"); state.formMsg=null; render(); }); });
 
     root.querySelectorAll("[data-add-materials-cost]").forEach(function(b){ b.addEventListener("click", function(){
@@ -3190,6 +3291,8 @@
 
     var jobForm = document.getElementById("job-form");
     if (jobForm) jobForm.addEventListener("submit", onSubmitJobForm);
+    var saveDraftBtn = document.getElementById("save-draft-btn");
+    if (saveDraftBtn) saveDraftBtn.addEventListener("click", onSaveDraft);
 
     // "Not sure yet" on estimated return date — clears and disables the date
     // input instead of leaving crew to guess whether a blank date is fine to
@@ -3736,31 +3839,21 @@
       });
   }
 
-  function onSubmitJobForm(e){
-    e.preventDefault();
-    if (!db) return;
-    var f = e.target;
-    var mode = f.getAttribute("data-mode");
-    var jobDescription = f.jobDescription.value.trim();
-    var date = f.date.value;
-    // Swap a decimal comma for a point (e.g. "2,5" -> "2.5") so it's stored
-    // the way it displays and totals everywhere else — not just when summed.
-    var hours = f.hours.value.trim().replace(",", ".");
-    var timeRange = f.timeRange ? f.timeRange.value.trim() : "";
+  // Pulls every field off the job-form into a plain object, the same way
+  // every time — shared by the real submit (below) and "Save as draft" (see
+  // onSaveDraft) so the two can never quietly drift apart on what a field is
+  // called or how it's read off the DOM.
+  function readJobFormFields(f){
     var jobStatusOn = root.querySelector('#job-form [data-seg="completed"] .on');
     var jobStatusVal = jobStatusOn ? jobStatusOn.getAttribute("data-val") : "no";
     var completed = jobStatusVal === "yes";
     var crewDone = jobStatusVal === "mine";
     var othersOn = root.querySelector('#job-form [data-seg="othersBefore"] .on');
-    var othersBefore = othersOn ? othersOn.getAttribute("data-val") === "yes" : false;
-    var employees = [state.session.name];
     var alsoOnsiteOn = root.querySelector('#job-form [data-seg="alsoOnsiteMode"] .on');
     var alsoOnsiteMode = alsoOnsiteOn ? alsoOnsiteOn.getAttribute("data-val") : "";
-    var alsoOnsite = (alsoOnsiteMode === "alone") ? ALONE_TEXT : (f.alsoOnsite ? f.alsoOnsite.value.trim() : "");
-    var materials = f.materials.value.trim();
     // Only present in the form for management (see renderJobForm) — never
-    // read or written for a crew submission, so editing your own entry never
-    // wipes out a cost Grace already filled in.
+    // read or written for a crew submission, so editing/drafting your own
+    // entry never wipes out a cost Grace already filled in.
     var materialsCost = null;
     if (f.materialsCost){
       var materialsCostRaw = f.materialsCost.value.trim();
@@ -3769,14 +3862,48 @@
         materialsCost = isNaN(mcNum) ? null : mcNum;
       }
     }
-    // Estimated return / Work still to do only apply to "Not finished" — for
-    // "Completed" or "My part's done" those fields are hidden in the form, so
-    // ignore whatever's left over in them from an earlier status selection.
-    var estimatedReturn = (jobStatusVal === "no" && f.estimatedReturn) ? f.estimatedReturn.value : "";
-    var returnUnsure = (jobStatusVal === "no" && f.returnUnsure) ? f.returnUnsure.value === "1" : false;
-    var remainingWork = (jobStatusVal === "no" && f.remainingWork) ? f.remainingWork.value.trim() : "";
-    var handoffTo = f.handoffTo ? f.handoffTo.value.trim() : "";
-    var handoffUnsure = f.handoffUnsure ? f.handoffUnsure.value === "1" : false;
+    var fields = {
+      jobDescription: f.jobDescription.value.trim(),
+      date: f.date.value,
+      // Swap a decimal comma for a point (e.g. "2,5" -> "2.5") so it's stored
+      // the way it displays and totals everywhere else — not just when summed.
+      hours: f.hours.value.trim().replace(",", "."),
+      timeRange: f.timeRange ? f.timeRange.value.trim() : "",
+      jobStatusVal: jobStatusVal, completed: completed, crewDone: crewDone,
+      othersBefore: othersOn ? othersOn.getAttribute("data-val") === "yes" : false,
+      alsoOnsiteMode: alsoOnsiteMode,
+      alsoOnsite: (alsoOnsiteMode === "alone") ? ALONE_TEXT : (f.alsoOnsite ? f.alsoOnsite.value.trim() : ""),
+      materials: f.materials.value.trim(),
+      hasMaterialsCostField: !!f.materialsCost,
+      materialsCost: materialsCost,
+      // Estimated return / Work still to do only apply to "Not finished" —
+      // for "Completed" or "My part's done" those fields are hidden in the
+      // form, so ignore whatever's left over in them from an earlier status.
+      estimatedReturn: (jobStatusVal === "no" && f.estimatedReturn) ? f.estimatedReturn.value : "",
+      returnUnsure: (jobStatusVal === "no" && f.returnUnsure) ? f.returnUnsure.value === "1" : false,
+      remainingWork: (jobStatusVal === "no" && f.remainingWork) ? f.remainingWork.value.trim() : "",
+      handoffTo: f.handoffTo ? f.handoffTo.value.trim() : "",
+      handoffUnsure: f.handoffUnsure ? f.handoffUnsure.value === "1" : false,
+    };
+    if (f.venue) fields.venue = f.venue.value.trim();
+    var clientSegOn = root.querySelector('#job-form [data-seg="client"] .on');
+    fields.client = clientSegOn ? clientSegOn.getAttribute("data-val") : "";
+    return fields;
+  }
+
+  function onSubmitJobForm(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var mode = f.getAttribute("data-mode");
+    var fl = readJobFormFields(f);
+    var jobDescription = fl.jobDescription, date = fl.date, hours = fl.hours, timeRange = fl.timeRange;
+    var jobStatusVal = fl.jobStatusVal, completed = fl.completed, crewDone = fl.crewDone;
+    var othersBefore = fl.othersBefore, alsoOnsiteMode = fl.alsoOnsiteMode, alsoOnsite = fl.alsoOnsite;
+    var materials = fl.materials, materialsCost = fl.materialsCost;
+    var estimatedReturn = fl.estimatedReturn, returnUnsure = fl.returnUnsure, remainingWork = fl.remainingWork;
+    var handoffTo = fl.handoffTo, handoffUnsure = fl.handoffUnsure;
+    var employees = [state.session.name];
 
     if (!jobDescription || !date || !hours){
       state.formMsg = {type:"error", text:"Please fill in the job description, date and hours."};
@@ -3799,7 +3926,7 @@
         crewDone: crewDone, handoffTo: crewDone && !handoffUnsure ? handoffTo : "", handoffUnsure: crewDone ? handoffUnsure : false,
         employees: employees, submittedBy: state.session.name, submittedAt: new Date().toISOString(),
       };
-      if (f.materialsCost) logBody.materialsCost = materialsCost;
+      if (fl.hasMaterialsCostField) logBody.materialsCost = materialsCost;
       return db.collection("job-logs").add(logBody).then(function(){
         // Keep the job's assignedEmployees up to date with everyone who's actually
         // logged a visit to it (not just whoever created it) — arrayUnion so this
@@ -3813,10 +3940,9 @@
 
     var p;
     if (mode === "new"){
-      var venue = f.venue.value.trim();
+      var venue = fl.venue;
       if (!venue){ state.formBusy=false; state.formMsg={type:"error", text:"Add the venue / job site."}; render(); return; }
-      var clientSegOn = root.querySelector('#job-form [data-seg="client"] .on');
-      var client = clientSegOn ? clientSegOn.getAttribute("data-val") : "";
+      var client = fl.client;
       p = db.collection("jobs").add({
         venue: venue, jobDescription: jobDescription, client: client,
         assignedEmployees: employees, status: "in-process", open: true,
@@ -3832,7 +3958,7 @@
         crewDone: crewDone, handoffTo: crewDone && !handoffUnsure ? handoffTo : "", handoffUnsure: crewDone ? handoffUnsure : false,
         editedBy: state.session.name, editedAt: new Date().toISOString(),
       };
-      if (f.materialsCost) patch.materialsCost = materialsCost;
+      if (fl.hasMaterialsCostField) patch.materialsCost = materialsCost;
       p = db.collection("job-logs").doc(editLogId).update(patch).then(function(){ return recomputeJobOpen(editJobId); });
     } else {
       var jobId = f.getAttribute("data-job-id");
@@ -3842,6 +3968,9 @@
 
     p.then(function(){
       state.formBusy = false; state.logView = "list"; state.updateJobId = null; state.editLogId = null;
+      // This job sheet started life as a saved draft — now that it's been
+      // submitted for real, the draft copy is done serving its purpose.
+      if (state.continuingDraftId){ discardDraft(state.session.name, state.continuingDraftId); state.continuingDraftId = null; }
       toast(mode === "edit" ? "Changes saved" : "Job sheet sent");
       render();
     }).catch(function(err){
@@ -3849,6 +3978,41 @@
       state.formMsg = {type:"error", text:"Couldn't save that (" + (err && err.code || "error") + "). Try again."};
       render();
     });
+  }
+
+  // "Save as draft" — a type="button" click, not a form submit, so none of
+  // the form's "required" fields block it: a draft can be as half-finished
+  // as it needs to be. Goes to localStorage only (see draftsKey/saveDrafts
+  // above), never anywhere near Firestore, so management never sees it.
+  function onSaveDraft(){
+    var f = document.getElementById("job-form");
+    if (!f) return;
+    var mode = f.getAttribute("data-mode");
+    var fl = readJobFormFields(f);
+    var hasContent = fl.jobDescription || fl.hours || fl.timeRange || fl.materials ||
+      fl.alsoOnsiteMode === "alone" || fl.alsoOnsite || (mode === "new" && fl.venue);
+    if (!hasContent){
+      state.formMsg = {type:"error", text:"Nothing to save yet — fill something in first."};
+      render(); return;
+    }
+    var me = state.session.name;
+    var draft = Object.assign({}, fl, {
+      mode: mode,
+      jobId: f.getAttribute("data-job-id") || null,
+      id: state.continuingDraftId || ("draft-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)),
+      savedAt: new Date().toISOString(),
+    });
+    var drafts = loadDrafts(me);
+    if (state.continuingDraftId){
+      drafts = drafts.map(function(d){ return d.id === draft.id ? draft : d; });
+    } else {
+      drafts.unshift(draft);
+    }
+    saveDrafts(me, drafts);
+    state.continuingDraftId = null;
+    state.logView = "list"; state.updateJobId = null; state.editLogId = null; state.formMsg = null;
+    toast("Saved as a draft");
+    render();
   }
 
   function onSubmitCrew(e){
