@@ -1686,9 +1686,20 @@
     html += '</div>';
 
     function candidateCard(j){
+      // Same "latest logged visit + who's been on it" info the ordinary Jobs
+      // cards show (see renderJobCard) — useful here specifically because
+      // two jobs with the same/similar venue name are exactly what you're
+      // trying to tell apart on this screen.
+      var latestLog = jobLogsFor(j.id)[0];
       var c = '<div class="job-card">';
       c += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
+      if (latestLog && latestLog.date){
+        c += '<div class="hint mono" style="margin-top:1px;">'+esc(fmtDay(latestLog.date))+'</div>';
+      }
       if (j.jobDescription) c += '<div class="hint" style="margin-top:2px">'+esc(j.jobDescription)+'</div>';
+      if (j.assignedEmployees && j.assignedEmployees.length){
+        c += '<div class="chips" style="margin-top:6px">'+j.assignedEmployees.map(function(n){return '<span class="pill pill-neutral">'+esc(n)+'</span>';}).join("")+'</div>';
+      }
       c += '</div><span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span></div>';
       c += '<button type="button" class="btn btn-outline btn-sm" style="margin-top:10px" data-pick-merge-target="'+esc(j.id)+'">Merge &ldquo;'+esc(source.venue)+'&rdquo; into this job</button>';
       c += '</div>';
