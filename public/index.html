@@ -279,6 +279,16 @@
      left/right like the full-width card does. */
   .jobs-grid .job-head{flex-direction:column; align-items:stretch;}
   .jobs-grid .job-head > div:last-child{text-align:left; flex-direction:row; flex-wrap:wrap; align-items:center; margin-top:2px;}
+
+  /* One section per day on the Jobs tab, newest day first, so jobs from the
+     same day sit together instead of all blending into one long list. */
+  .date-group{margin-top:22px;}
+  .date-group:first-child{margin-top:16px;}
+  .date-heading{display:flex; align-items:baseline; gap:10px; margin-bottom:10px;}
+  .date-heading .dow{font-family:"Big Shoulders Display"; font-weight:800; font-size:19px; color:var(--ink);}
+  .date-heading .count{font-size:12.5px; color:var(--ink-faint); font-weight:600;}
+  .date-heading::after{content:""; flex:1; height:1px; background:var(--line);}
+
   .timeline{margin-top:10px; padding-top:10px; border-top:1px solid var(--line);}
   .timeline-item{padding:8px 0; border-bottom:1px dashed var(--line); font-size:13px;}
   .timeline-item:last-child{border-bottom:none;}
@@ -420,6 +430,35 @@
   function parseDate(s){ var p = s.split("-"); return new Date(+p[0], +p[1]-1, +p[2]); }
   function fmtDay(s){ var d = parseDate(s); return d.toLocaleDateString(undefined, {weekday:"short", day:"numeric", month:"short"}); }
   function fmtShort(s){ var d = parseDate(s); return d.toLocaleDateString(undefined, {day:"numeric", month:"short"}); }
+  // "Monday 5th October" — the full heading used above each day's section on
+  // the Jobs tab (see groupJobsByDate).
+  function ordinal(n){ var s = ["th","st","nd","rd"], v = n % 100; return n + (s[(v-20)%10] || s[v] || s[0]); }
+  function fmtDateHeading(s){
+    var d = parseDate(s);
+    return d.toLocaleDateString(undefined, {weekday:"long"}) + " " + ordinal(d.getDate()) + " " + d.toLocaleDateString(undefined, {month:"long"});
+  }
+  // Buckets a job list into one group per day — the date used is whichever
+  // date already shows on that job's card (its most recently LOGGED visit,
+  // see renderJobCard), so the heading someone reads always matches what's
+  // on the card underneath it. Preserves whatever order `list` came in
+  // (already newest-activity-first), and groups with no date at all — a job
+  // that's somehow never had a visit logged — sort to the very end.
+  function groupJobsByDate(list){
+    var byDate = {}, order = [];
+    list.forEach(function(j){
+      var latestLog = jobLogsFor(j.id)[0];
+      var key = (latestLog && latestLog.date) ? latestLog.date : "";
+      if (!byDate[key]){ byDate[key] = []; order.push(key); }
+      byDate[key].push(j);
+    });
+    order.sort(function(a, b){
+      if (!a && !b) return 0;
+      if (!a) return 1;
+      if (!b) return -1;
+      return b.localeCompare(a);
+    });
+    return order.map(function(key){ return {date:key, jobs:byDate[key]}; });
+  }
   function fmtTime(iso){ try{ return new Date(iso).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}); }catch(e){ return ""; } }
   function getMonday(d){ var day=d.getDay(); var diff=(day===0?-6:1-day); return new Date(d.getFullYear(), d.getMonth(), d.getDate()+diff); }
   function dateToStr(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
@@ -2051,9 +2090,14 @@
     html += '</div>';
     if (list.length===0){ html += '<div class="card"><p class="empty-note">'+(q?"No jobs match.":"No jobs yet.")+'</p></div>'; }
     else {
-      html += '<div class="jobs-grid">';
-      list.forEach(function(j){ html += renderJobCard(j, {admin:isAdmin()}); });
-      html += '</div>';
+      // One section per day, newest day first — see groupJobsByDate.
+      groupJobsByDate(list).forEach(function(g){
+        html += '<div class="date-group">';
+        html += '<div class="date-heading"><span class="dow">'+(g.date?esc(fmtDateHeading(g.date)):"No date logged")+'</span><span class="count">'+g.jobs.length+' job'+(g.jobs.length===1?"":"s")+'</span></div>';
+        html += '<div class="jobs-grid">';
+        g.jobs.forEach(function(j){ html += renderJobCard(j, {admin:isAdmin()}); });
+        html += '</div></div>';
+      });
     }
     return html;
   }
