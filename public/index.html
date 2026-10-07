@@ -520,6 +520,59 @@
   // the question" are distinguishable in the data, not both a blank string.
   var ALONE_TEXT = "Alone";
 
+  // ---------- contraction auto-fix (crew-side free-text fields) ----------
+  // A phone keyboard autocorrects "dont" -> "don't" on its own; a laptop's
+  // browser does nothing of the kind, which is the actual gap this closes.
+  // Deliberately a short list of words that are NEVER correct on their own
+  // (no "its"/"lets"/"well" etc — those are valid words without an
+  // apostrophe too, so guessing there risks changing what someone meant).
+  var CONTRACTION_FIXES = {
+    dont:"don't", cant:"can't", wont:"won't", isnt:"isn't", wasnt:"wasn't",
+    arent:"aren't", werent:"weren't", didnt:"didn't", doesnt:"doesn't",
+    hasnt:"hasn't", havent:"haven't", hadnt:"hadn't", wouldnt:"wouldn't",
+    couldnt:"couldn't", shouldnt:"shouldn't", mustnt:"mustn't",
+    youre:"you're", theyre:"they're", weve:"we've", ive:"I've",
+    youve:"you've", theyve:"they've", hes:"he's", shes:"she's",
+    theyll:"they'll", youll:"you'll", whats:"what's", wheres:"where's",
+    whos:"who's", thats:"that's", im:"I'm",
+  };
+  // Fires on every keystroke in a bound field; only actually does anything
+  // the instant a word just got "finished" by a space/punctuation/newline —
+  // same moment a phone keyboard would step in — so it never fights with
+  // whatever's still being typed.
+  function fixContractionsOnInput(e){
+    var el = e.target;
+    if (el.selectionStart !== el.selectionEnd) return; // a selection, not a caret — leave it alone
+    var pos = el.selectionStart;
+    var val = el.value;
+    var justTyped = val.charAt(pos - 1);
+    if (!justTyped || /[A-Za-z]/.test(justTyped)) return; // still mid-word
+    var before = val.slice(0, pos - 1);
+    var wordMatch = before.match(/[A-Za-z]+$/);
+    if (!wordMatch) return;
+    var word = wordMatch[0];
+    var fix = CONTRACTION_FIXES[word.toLowerCase()];
+    if (!fix) return;
+    // Keep whatever capitalisation they actually typed on the first letter.
+    var replacement = (word.charAt(0) === word.charAt(0).toUpperCase())
+      ? fix.charAt(0).toUpperCase() + fix.slice(1) : fix;
+    if (replacement === word) return;
+    var startIdx = pos - 1 - word.length;
+    el.value = val.slice(0, startIdx) + replacement + val.slice(pos - 1);
+    var delta = replacement.length - word.length;
+    el.selectionStart = el.selectionEnd = pos + delta;
+  }
+  // Wires the fix onto every matching field inside a given form/container —
+  // called once from bindEvents each render, same pattern as the rest of
+  // this file's event wiring.
+  function bindContractionFixes(container){
+    if (!container) return;
+    ["jobDescription","materials","remainingWork"].forEach(function(name){
+      var el = container.querySelector('[name="'+name+'"]');
+      if (el) el.addEventListener("input", fixContractionsOnInput);
+    });
+  }
+
   function activeCrew(){ return state.crew.filter(function(c){ return c.active !== false; }); }
   function isAdmin(){ return !!(state.session && state.session.role === "admin"); }
   // "Lead" is a semi-management tier — Jayden's role. A lead sees every job
@@ -3293,6 +3346,7 @@
     if (jobForm) jobForm.addEventListener("submit", onSubmitJobForm);
     var saveDraftBtn = document.getElementById("save-draft-btn");
     if (saveDraftBtn) saveDraftBtn.addEventListener("click", onSaveDraft);
+    bindContractionFixes(jobForm);
 
     // "Not sure yet" on estimated return date — clears and disables the date
     // input instead of leaving crew to guess whether a blank date is fine to
