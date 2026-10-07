@@ -289,6 +289,34 @@
   .date-heading .count{font-size:12.5px; color:var(--ink-faint); font-weight:600;}
   .date-heading::after{content:""; flex:1; height:1px; background:var(--line);}
 
+  /* The big, plain "For Drew" pricing screen — large type, high contrast,
+     nothing to hunt for. See renderDrewPricingView. */
+  .drew-card{max-width:700px; margin:0 auto; background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:28px 26px; box-shadow:var(--shadow);}
+  .drew-venue{font-size:38px; font-weight:800; line-height:1.05; font-family:"Big Shoulders Display","IBM Plex Sans",sans-serif;}
+  .drew-desc{font-size:19px; color:var(--ink-soft); margin-top:8px;}
+  .drew-section-label{font-size:15px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.04em; margin:30px 0 12px; padding-bottom:8px; border-bottom:2px solid var(--line);}
+  .drew-visit{display:flex; justify-content:space-between; align-items:baseline; gap:16px; padding:14px 0; border-bottom:1px solid var(--line); font-size:21px;}
+  .drew-visit:last-child{border-bottom:none;}
+  .drew-visit .who{font-weight:700;}
+  .drew-visit .when{color:var(--ink-soft); font-weight:400; font-size:17px;}
+  .drew-visit .hrs{font-weight:800; font-size:23px; white-space:nowrap;}
+  .drew-also{font-size:15px; color:var(--ink-faint); margin-top:2px;}
+  .drew-total-row{display:flex; justify-content:space-between; align-items:baseline; margin-top:16px; padding-top:16px; border-top:3px solid var(--ink); font-size:22px; font-weight:800;}
+  .drew-mat-row{display:flex; justify-content:space-between; gap:16px; padding:10px 0; font-size:19px;}
+  .drew-mat-row .what{color:var(--ink);}
+  .drew-mat-row .cost{font-weight:700; white-space:nowrap;}
+  .drew-mat-total{display:flex; justify-content:space-between; margin-top:10px; padding-top:10px; border-top:2px solid var(--line); font-size:20px; font-weight:800;}
+  .drew-price-box{margin-top:34px; padding:26px; background:var(--accent-soft); border:2px solid var(--accent); border-radius:14px; text-align:center;}
+  .drew-price-label{font-size:20px; font-weight:700; color:var(--accent-strong); margin-bottom:14px;}
+  .drew-price-input-wrap{display:flex; align-items:center; justify-content:center; gap:6px;}
+  .drew-dollar{font-size:34px; font-weight:800; color:var(--accent-strong);}
+  .drew-price-input{width:220px; font-size:34px; font-weight:800; text-align:center; padding:12px 10px; border:2px solid var(--accent); border-radius:10px; color:var(--ink); background:var(--surface);}
+  .drew-save-btn{margin-top:20px; width:100%; padding:22px; font-size:24px; font-weight:800; border-radius:12px; border:none; background:var(--success); color:#fff; cursor:pointer; box-shadow:0 4px 14px -4px rgba(47,143,91,.5);}
+  .drew-save-btn:active{transform:translateY(1px);}
+  .drew-save-btn:disabled{opacity:.6; cursor:default;}
+  .drew-back{font-size:16px; font-weight:700;}
+  .drew-saved-msg{margin-top:16px; background:var(--success-soft); color:var(--success); font-weight:700; font-size:18px; text-align:center; padding:14px; border-radius:10px;}
+
   .timeline{margin-top:10px; padding-top:10px; border-top:1px solid var(--line);}
   .timeline-item{padding:8px 0; border-bottom:1px dashed var(--line); font-size:13px;}
   .timeline-item:last-child{border-bottom:none;}
@@ -417,6 +445,7 @@
     calendarMonthOffset: 0, calendarSelectedDate: null,
     myCalendarMonthOffset: 0, myCalendarSelectedDate: null,
     continuingDraftId: null, trashConfirmDraftId: null,
+    drewPricingView: false, drewSaving: false, drewSaved: false, drewPriceMsg: null,
   };
 
   function esc(s){
@@ -668,6 +697,8 @@
       html += renderUnmergePicker();
     } else if (state.viewingScheduleId){
       html += renderScheduleDetail();
+    } else if (state.viewingJobId && state.drewPricingView){
+      html += renderDrewPricingView();
     } else if (state.viewingJobId){
       html += renderJobDetailView();
     } else if (!canManage()){
@@ -1424,7 +1455,11 @@
     // cards already (their own "Not finished"/"Completed" tabs), so it's
     // skipped there to avoid repeating it back to them.
     var latestLog = jobLogsFor(j.id)[0];
-    var html = '<div class="job-card job-card-tap" data-view-job="'+esc(j.id)+'">';
+    // On the For Drew tab, tapping a card opens the big, plain pricing
+    // screen (renderDrewPricingView) instead of the ordinary job detail
+    // view — same card, same list, just a different destination.
+    var viewAttr = opts.drewMode ? 'data-view-job-drew="'+esc(j.id)+'"' : 'data-view-job="'+esc(j.id)+'"';
+    var html = '<div class="job-card job-card-tap" '+viewAttr+'>';
     html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
     if (latestLog && latestLog.date){
       html += '<div class="hint mono" style="margin-top:1px;">'+esc(fmtDay(latestLog.date))+'</div>';
@@ -2141,9 +2176,76 @@
     html += '</div>';
     if (awaiting.length){
       html += '<div class="jobs-grid">';
-      awaiting.forEach(function(j){ html += renderJobCard(j, {admin:true}); });
+      awaiting.forEach(function(j){ html += renderJobCard(j, {admin:true, drewMode:true}); });
       html += '</div>';
     }
+    return html;
+  }
+
+  // Big, plain, "nothing to hunt for" version of a job's details, reached
+  // only from the For Drew tab (see renderJobCard's drewMode) — who was
+  // onsite and for how long, what materials cost, and one big box to put a
+  // price in. Everything else on the ordinary job detail view (status,
+  // editing, merge, trash) is deliberately left off; those stay on the
+  // regular screen management already uses everywhere else.
+  function renderDrewPricingView(){
+    var j = state.jobs.filter(function(x){ return x.id === state.viewingJobId; })[0];
+    if (!j){
+      return '<div class="card"><p class="empty-note">That job isn\'t there anymore.</p><button type="button" class="btn btn-outline" data-action="close-job-detail">&larr; Back</button></div>';
+    }
+    var logs = jobLogsFor(j.id).slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+    var totalHours = logs.reduce(function(s,l){ return s + numHours(l.hours); }, 0);
+    var materialsLogs = logs.filter(function(l){ return l.materials || (l.materialsCost!=null && l.materialsCost!==""); });
+    var materialsTotal = logs.reduce(function(s,l){ return s + ((l.materialsCost!=null && l.materialsCost!=="") ? Number(l.materialsCost) : 0); }, 0);
+    var hasAnyCost = logs.some(function(l){ return l.materialsCost!=null && l.materialsCost!==""; });
+
+    var html = '<button type="button" class="btn btn-ghost drew-back" data-action="close-job-detail" style="margin-bottom:8px; padding-left:0">&larr; Back to the list</button>';
+    html += '<div class="drew-card">';
+    html += '<div class="drew-venue">'+esc(j.venue||"")+'</div>';
+    if (j.jobDescription) html += '<div class="drew-desc">'+esc(j.jobDescription)+'</div>';
+
+    html += '<div class="drew-section-label">Who worked, and how long</div>';
+    if (!logs.length){
+      html += '<p class="empty-note">Nothing logged on this job yet.</p>';
+    } else {
+      logs.forEach(function(l){
+        var hrsText = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
+        html += '<div class="drew-visit"><div><div class="who">'+esc(l.submittedBy||"")+'</div>';
+        html += '<div class="when">'+(l.date?esc(fmtDateHeading(l.date)):"")+'</div>';
+        if (l.alsoOnsite === ALONE_TEXT){
+          html += '<div class="drew-also">Worked alone</div>';
+        } else if (l.alsoOnsite){
+          html += '<div class="drew-also">Also onsite: '+esc(l.alsoOnsite)+'</div>';
+        }
+        html += '</div><div class="hrs">'+hrsText+' hrs</div></div>';
+      });
+      var totalDisplay = (Math.round(totalHours*10)/10).toString();
+      html += '<div class="drew-total-row"><div>Total hours</div><div>'+esc(totalDisplay)+' hrs</div></div>';
+    }
+
+    html += '<div class="drew-section-label">Materials</div>';
+    if (!materialsLogs.length){
+      html += '<p class="empty-note">No materials noted on this job.</p>';
+    } else {
+      materialsLogs.forEach(function(l){
+        var costText = (l.materialsCost!=null && l.materialsCost!=="") ? '$'+Number(l.materialsCost).toFixed(2) : '&mdash;';
+        html += '<div class="drew-mat-row"><div class="what">'+esc(l.materials||"(no note)")+'</div><div class="cost mono">'+costText+'</div></div>';
+      });
+      if (hasAnyCost){
+        html += '<div class="drew-mat-total"><div>Materials total</div><div class="mono">$'+materialsTotal.toFixed(2)+'</div></div>';
+      }
+    }
+
+    html += '<div class="drew-price-box">';
+    html += '<div class="drew-price-label">What should this job be priced at?</div>';
+    if (state.drewPriceMsg) html += '<div class="msg msg-error" style="margin-bottom:12px">'+esc(state.drewPriceMsg)+'</div>';
+    html += '<div class="drew-price-input-wrap"><span class="drew-dollar">$</span>' +
+      '<input type="text" inputmode="decimal" class="drew-price-input" id="drew-price-input" value="'+(j.invoiceAmount!=null?esc(Number(j.invoiceAmount).toFixed(2)):"")+'" placeholder="0.00"></div>';
+    html += '<button type="button" class="drew-save-btn" id="drew-save-btn" data-job-id="'+esc(j.id)+'" '+(state.drewSaving?"disabled":"")+'>'+(state.drewSaving?"SAVING…":"SAVE THIS PRICE")+'</button>';
+    if (state.drewSaved) html += '<div class="drew-saved-msg" style="display:block">&#10003; Saved — Grace will see it straight away.</div>';
+    html += '</div>';
+
+    html += '</div>';
     return html;
   }
 
@@ -3286,7 +3388,7 @@
 
   // ---------- events ----------
   function bindEvents(){
-    root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.editingJobId=null; state.viewingJobId=null; render(); }); });
+    root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.editingJobId=null; state.viewingJobId=null; state.drewPricingView=false; render(); }); });
     root.querySelectorAll("[data-mgmt]").forEach(function(b){ b.addEventListener("click", function(){ state.mgmtSub=b.getAttribute("data-mgmt"); render(); }); });
 
     var logoutBtn = root.querySelector('[data-action="logout"]');
@@ -3541,9 +3643,23 @@
     root.querySelectorAll("[data-job-status-select]").forEach(function(sel){
       sel.addEventListener("change", function(){ setJobStatus(sel.getAttribute("data-job-status-select"), sel.value); });
     });
-    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; render(); }); });
+    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; render(); }); });
+    root.querySelectorAll("[data-view-job-drew]").forEach(function(b){ b.addEventListener("click", function(){
+      state.viewingJobId = b.getAttribute("data-view-job-drew");
+      state.drewPricingView = true; state.drewSaved = false; state.drewPriceMsg = null;
+      render();
+    }); });
     var closeJobDetailBtn = root.querySelector('[data-action="close-job-detail"]');
-    if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){ state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null; render(); });
+    if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){
+      state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null;
+      state.drewPricingView=false; state.drewSaving=false; state.drewSaved=false; state.drewPriceMsg=null;
+      render();
+    });
+    var drewSaveBtn = document.getElementById("drew-save-btn");
+    if (drewSaveBtn) drewSaveBtn.addEventListener("click", function(){
+      var input = document.getElementById("drew-price-input");
+      setDrewPrice(drewSaveBtn.getAttribute("data-job-id"), input ? input.value : "");
+    });
     var toggleJobActionsBtn = root.querySelector('[data-action="toggle-job-actions"]');
     if (toggleJobActionsBtn) toggleJobActionsBtn.addEventListener("click", function(){ state.jobActionsOpen = !state.jobActionsOpen; render(); });
     root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
@@ -4310,6 +4426,34 @@
     db.collection("job-logs").doc(logId).update(patch)
       .then(function(){ state.editingLogMaterialsCostId = null; toast("Materials cost saved"); render(); })
       .catch(function(){ toast("Couldn't save that — try again."); });
+  }
+
+  // The big "SAVE THIS PRICE" button's save — same patch shape and pricedAt
+  // stamping onSubmitJobDetails already does for the invoice amount (see
+  // below), just without needing the rest of that form (venue/description)
+  // along for the ride.
+  function setDrewPrice(jobId, rawValue){
+    if (!db || !jobId) return;
+    var trimmed = (rawValue || "").trim();
+    var num = parseFloat(trimmed);
+    if (trimmed === "" || isNaN(num) || num < 0){
+      state.drewPriceMsg = "Enter a price before saving.";
+      render(); return;
+    }
+    var job = state.jobs.filter(function(x){ return x.id === jobId; })[0];
+    var hadAmount = job && job.invoiceAmount != null && job.invoiceAmount !== "";
+    var patch = { invoiceAmount: Math.round(num * 100) / 100 };
+    if (!hadAmount) patch.pricedAt = new Date().toISOString();
+    state.drewSaving = true; state.drewPriceMsg = null; state.drewSaved = false; render();
+    db.collection("jobs").doc(jobId).update(patch).then(function(){
+      state.drewSaving = false; state.drewSaved = true;
+      toast("Price saved");
+      render();
+    }).catch(function(){
+      state.drewSaving = false;
+      state.drewPriceMsg = "Couldn't save that — try again.";
+      render();
+    });
   }
 
   function toggleNeedsPricing(jobId){
