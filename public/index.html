@@ -1119,6 +1119,25 @@
     return "This isn't a job — it just adds a fixed "+hrs.toFixed(1)+"h to your timesheet for the date you pick.";
   }
 
+  // Every weekday (Mon–Fri) date string from `from` to `to` inclusive — used
+  // to split a multi-day leave selection into one entry per working day,
+  // weekends skipped automatically. A single day (from === to) always
+  // includes that day itself regardless — the weekend skip only kicks in
+  // once it's an actual range, never for a single date someone picked on
+  // purpose.
+  function weekdayRange(from, to){
+    if (from === to) return [from];
+    var days = [];
+    var cur = parseDate(from);
+    var end = parseDate(to);
+    while (cur <= end){
+      var dow = cur.getDay();
+      if (dow !== 0 && dow !== 6) days.push(dateToStr(cur));
+      cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate()+1);
+    }
+    return days;
+  }
+
   function renderLeaveForm(opts){
     var leave = opts.leave || {};
     var isEdit = opts.mode === "edit";
@@ -1126,6 +1145,7 @@
     var html = '<div class="card">';
     html += '<div class="section-title">'+(isEdit?"Edit leave day":"Add a leave day")+'</div>';
     html += '<button type="button" class="btn btn-ghost" data-action="back-to-list" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    if (state.formMsg) html += '<div class="msg '+(state.formMsg.type==="error"?"msg-error":"msg-success")+'">'+esc(state.formMsg.text)+'</div>';
     html += '<form id="leave-form" data-mode="'+opts.mode+'" '+(isEdit?('data-leave-id="'+esc(leave.id)+'"'):'')+'>';
     html += '<div class="field"><label>Type</label><div class="seg" data-seg="leaveType">' +
       '<button type="button" data-val="sick" class="'+(type==="sick"?"on":"")+'">Sick day</button>' +
@@ -1134,8 +1154,16 @@
       '<button type="button" data-val="public" class="'+(type==="public"?"on":"")+'">Public holiday</button>' +
       '<button type="button" data-val="unpaid" class="'+(type==="unpaid"?"on":"")+'">Leave without pay</button>' +
     '</div></div>';
-    html += field("Date", '<input type="date" name="date" value="'+esc(isEdit?(leave.date||todayStr()):todayStr())+'" required>');
-    html += '<button type="submit" class="btn btn-primary btn-block" id="leave-submit-btn" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Saving…":(isEdit?"Save changes":"Log leave day"))+'</button>';
+    if (isEdit){
+      html += field("Date", '<input type="date" name="date" value="'+esc(leave.date||todayStr())+'" required>');
+    } else {
+      html += '<div class="row2">';
+      html += field("From", '<input type="date" name="date" value="'+esc(todayStr())+'" required>');
+      html += field("To (optional)", '<input type="date" name="dateTo">');
+      html += '</div>';
+      html += '<p class="hint" style="margin:-6px 0 12px">Away just one day? Leave "To" blank. Pick a range and Saturdays/Sundays in it are skipped automatically.</p>';
+    }
+    html += '<button type="submit" class="btn btn-primary btn-block" id="leave-submit-btn" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Saving…":(isEdit?"Save changes":"Log leave"))+'</button>';
     html += '</form></div>';
     return html;
   }
@@ -1146,23 +1174,41 @@
     var f = e.target;
     var mode = f.getAttribute("data-mode");
     var date = f.date.value;
+    var dateTo = (mode !== "edit" && f.dateTo) ? f.dateTo.value : "";
     var typeOn = root.querySelector('#leave-form [data-seg="leaveType"] .on');
     var type = typeOn ? typeOn.getAttribute("data-val") : "sick";
     if (!date) return;
-    state.formBusy = true; render();
+
+    var dates = [date];
+    if (mode !== "edit" && dateTo && dateTo !== date){
+      if (dateTo < date){
+        state.formMsg = {type:"error", text:"The “To” date is before the “From” date."};
+        render(); return;
+      }
+      dates = weekdayRange(date, dateTo);
+      if (!dates.length){
+        state.formMsg = {type:"error", text:"That range is only weekend days — nothing to log."};
+        render(); return;
+      }
+    }
+
+    state.formBusy = true; state.formMsg = null; render();
     var p;
     if (mode === "edit"){
       var id = f.getAttribute("data-leave-id");
       p = db.collection("leave-logs").doc(id).update({type: type, date: date});
     } else {
-      p = db.collection("leave-logs").add({
-        employee: state.session.name, type: type, date: date, hours: leaveHours(type),
-        createdAt: new Date().toISOString(),
-      });
+      p = Promise.all(dates.map(function(d){
+        return db.collection("leave-logs").add({
+          employee: state.session.name, type: type, date: d, hours: leaveHours(type),
+          createdAt: new Date().toISOString(),
+        });
+      }));
     }
     p.then(function(){
       state.formBusy = false; state.logView = "list"; state.editLeaveId = null;
-      toast(mode === "edit" ? "Leave day updated" : leaveLabel(type) + " logged");
+      toast(mode === "edit" ? "Leave day updated" :
+        (dates.length > 1 ? dates.length + " leave days logged (" + leaveLabel(type) + ")" : leaveLabel(type) + " logged"));
       render();
     }).catch(function(){
       state.formBusy = false;
@@ -3265,7 +3311,7 @@
     }); });
 
     var newLeaveBtn = root.querySelector('[data-action="new-leave"]');
-    if (newLeaveBtn) newLeaveBtn.addEventListener("click", function(){ state.logView="leave"; render(); });
+    if (newLeaveBtn) newLeaveBtn.addEventListener("click", function(){ state.logView="leave"; state.formMsg=null; render(); });
     var viewTimesheetBtn = root.querySelector('[data-action="view-timesheet"]');
     if (viewTimesheetBtn) viewTimesheetBtn.addEventListener("click", function(){ state.logView="timesheet"; render(); });
     var viewCalendarBtn = root.querySelector('[data-action="view-calendar"]');
@@ -3276,7 +3322,7 @@
     if (closeMyScheduleBtn) closeMyScheduleBtn.addEventListener("click", function(){ state.myScheduleFormOpen = false; state.myScheduleFormMsg = null; render(); });
     var myScheduleForm = document.getElementById("my-schedule-form");
     if (myScheduleForm) myScheduleForm.addEventListener("submit", onSubmitMySchedule);
-    root.querySelectorAll("[data-edit-leave]").forEach(function(b){ b.addEventListener("click", function(){ state.editLeaveId=b.getAttribute("data-edit-leave"); state.logView="editLeave"; render(); }); });
+    root.querySelectorAll("[data-edit-leave]").forEach(function(b){ b.addEventListener("click", function(){ state.editLeaveId=b.getAttribute("data-edit-leave"); state.logView="editLeave"; state.formMsg=null; render(); }); });
     var leaveForm = document.getElementById("leave-form");
     if (leaveForm) leaveForm.addEventListener("submit", onSubmitLeaveForm);
 
