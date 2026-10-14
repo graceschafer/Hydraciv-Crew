@@ -317,6 +317,24 @@
   .drew-back{font-size:16px; font-weight:700;}
   .drew-saved-msg{margin-top:16px; background:var(--success-soft); color:var(--success); font-weight:700; font-size:18px; text-align:center; padding:14px; border-radius:10px;}
 
+  /* "Select to merge" multi-pick mode on the Jobs tab, and its confirm screen. */
+  .job-card-selectable{padding-left:42px; cursor:pointer; border:2px solid var(--line);}
+  .job-card-selectable.job-card-picked{border-color:var(--accent); background:var(--accent-soft);}
+  .job-check{position:absolute; left:14px; top:16px; width:22px; height:22px; border-radius:6px; border:2px solid var(--line); background:var(--surface); display:flex; align-items:center; justify-content:center; font-weight:800; color:#fff;}
+  .job-card-picked .job-check{background:var(--accent); border-color:var(--accent);}
+  .jobs-grid .job-card-selectable{position:relative;}
+  .select-bar{position:fixed; left:0; right:0; bottom:0; background:var(--accent-strong); color:#fff; padding:14px 18px; display:flex; align-items:center; justify-content:center; gap:14px; box-shadow:0 -4px 16px rgba(0,0,0,.18); z-index:5;}
+  .select-bar-count{font-weight:800; font-size:16px;}
+  .select-bar .btn-primary{background:var(--success); border-color:var(--success);}
+  .review-row{display:flex; align-items:flex-start; gap:12px; padding:14px 0; border-bottom:1px solid var(--line); cursor:pointer;}
+  .review-row:last-child{border-bottom:none;}
+  .review-radio{width:22px; height:22px; border-radius:50%; border:2px solid var(--line); flex:none; margin-top:2px; display:flex; align-items:center; justify-content:center;}
+  .review-row.picked .review-radio{border-color:var(--accent);}
+  .review-row.picked .review-radio::after{content:""; width:12px; height:12px; border-radius:50%; background:var(--accent);}
+  .review-row .rv-venue{font-weight:700; font-size:15.5px;}
+  .review-row .rv-meta{font-size:12.5px; color:var(--ink-faint); margin-top:2px;}
+  .keep-tag{font-size:11px; font-weight:800; color:var(--accent-strong); background:var(--accent-soft); padding:2px 8px; border-radius:999px; margin-left:8px;}
+
   .timeline{margin-top:10px; padding-top:10px; border-top:1px solid var(--line);}
   .timeline-item{padding:8px 0; border-bottom:1px dashed var(--line); font-size:13px;}
   .timeline-item:last-child{border-bottom:none;}
@@ -446,6 +464,8 @@
     myCalendarMonthOffset: 0, myCalendarSelectedDate: null,
     continuingDraftId: null, trashConfirmDraftId: null,
     drewPricingView: false, drewSaving: false, drewSaved: false, drewPriceMsg: null,
+    bulkMergeActive: false, bulkMergeSelected: [], bulkMergeReviewing: false,
+    bulkMergeTargetId: null, bulkMergeRenameOverride: null, bulkMergeBusy: false,
   };
 
   function esc(s){
@@ -693,6 +713,8 @@
       html += renderLeaveEditView();
     } else if (state.mergeSourceId){
       html += renderMergePicker();
+    } else if (state.bulkMergeReviewing){
+      html += renderBulkMergeReview();
     } else if (state.unmergeTargetId){
       html += renderUnmergePicker();
     } else if (state.viewingScheduleId){
@@ -1458,8 +1480,14 @@
     // On the For Drew tab, tapping a card opens the big, plain pricing
     // screen (renderDrewPricingView) instead of the ordinary job detail
     // view — same card, same list, just a different destination.
-    var viewAttr = opts.drewMode ? 'data-view-job-drew="'+esc(j.id)+'"' : 'data-view-job="'+esc(j.id)+'"';
-    var html = '<div class="job-card job-card-tap" '+viewAttr+'>';
+    // In bulk-select mode (see renderJobsAdmin), tapping toggles the job in
+    // or out of the merge selection instead of opening anything.
+    var viewAttr = opts.bulkSelectMode ? 'data-bulk-pick="'+esc(j.id)+'"'
+      : (opts.drewMode ? 'data-view-job-drew="'+esc(j.id)+'"' : 'data-view-job="'+esc(j.id)+'"');
+    var isPicked = opts.bulkSelectMode && state.bulkMergeSelected.indexOf(j.id) !== -1;
+    var cardClass = "job-card job-card-tap" + (opts.bulkSelectMode ? " job-card-selectable" : "") + (isPicked ? " job-card-picked" : "");
+    var html = '<div class="'+cardClass+'" '+viewAttr+'>';
+    if (opts.bulkSelectMode) html += '<div class="job-check">'+(isPicked?"&#10003;":"")+'</div>';
     html += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
     if (latestLog && latestLog.date){
       html += '<div class="hint mono" style="margin-top:1px;">'+esc(fmtDay(latestLog.date))+'</div>';
@@ -1487,7 +1515,7 @@
     }
     html += '</div></div>';
     if (opts.agingNote){ html += '<div class="hint" style="'+esc(opts.agingNoteStyle||"")+'; margin-top:6px;">'+esc(opts.agingNote)+'</div>'; }
-    html += '<div class="job-card-cta">Tap for full details <span aria-hidden="true">&rarr;</span></div>';
+    if (!opts.bulkSelectMode) html += '<div class="job-card-cta">Tap for full details <span aria-hidden="true">&rarr;</span></div>';
     html += '</div>';
     return html;
   }
@@ -2078,7 +2106,21 @@
     var q = (state.venueQuery || "").trim().toLowerCase();
 
     var html = '<div class="card">';
+    html += '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">';
     html += '<div><div class="section-title">Jobs</div><p class="section-sub" style="margin-bottom:0">Every job, its status, and who\'s on it.</p></div>';
+    // Merging more than two jobs used to mean repeating the merge flow one
+    // pair at a time — this lets you tick everything that belongs together
+    // and fold it into one job in a single step. Same admin-only gate as the
+    // rest of merging.
+    if (isAdmin()){
+      html += state.bulkMergeActive
+        ? '<button type="button" class="btn btn-ghost" data-action="cancel-bulk-merge">Cancel</button>'
+        : '<button type="button" class="btn btn-outline" data-action="start-bulk-merge">Select to merge</button>';
+    }
+    html += '</div>';
+    if (state.bulkMergeActive){
+      html += '<p class="hint" style="margin-top:10px">Tap every job that belongs together. You\'ll pick which one they merge into next.</p>';
+    }
     html += field("Search", '<input type="text" id="venue-search-input" placeholder="e.g. Deer Park, shelf, VTASK 123" value="'+esc(state.venueQuery)+'" autocomplete="off">');
 
     var list;
@@ -2130,11 +2172,113 @@
         html += '<div class="date-group">';
         html += '<div class="date-heading"><span class="dow">'+(g.date?esc(fmtDateHeading(g.date)):"No date logged")+'</span><span class="count">'+g.jobs.length+' job'+(g.jobs.length===1?"":"s")+'</span></div>';
         html += '<div class="jobs-grid">';
-        g.jobs.forEach(function(j){ html += renderJobCard(j, {admin:isAdmin()}); });
+        g.jobs.forEach(function(j){ html += renderJobCard(j, {admin:isAdmin(), bulkSelectMode: state.bulkMergeActive}); });
         html += '</div></div>';
       });
     }
+    if (state.bulkMergeActive){
+      html += '<div class="select-bar"><span class="select-bar-count">'+state.bulkMergeSelected.length+' selected</span>' +
+        '<button type="button" class="btn btn-primary" data-action="review-bulk-merge" '+(state.bulkMergeSelected.length<2?"disabled":"")+'>Merge selected</button></div>';
+    }
     return html;
+  }
+
+  // Confirm screen for a bulk merge (see "Select to merge" in renderJobsAdmin)
+  // — pick which of the selected jobs survives, optionally rename it, then
+  // fold every other selected job's visits onto it in one go.
+  function renderBulkMergeReview(){
+    var chosen = state.jobs.filter(function(j){ return state.bulkMergeSelected.indexOf(j.id) !== -1; });
+    if (chosen.length < 2){
+      state.bulkMergeReviewing = false;
+      return renderJobsAdmin();
+    }
+    // Default to whichever selected job has the most recent activity — same
+    // "newest first" logic the rest of the Jobs tab already sorts by — so
+    // the right one is usually already picked without Grace having to think
+    // about it. Only re-derived when nothing's picked yet, or the previous
+    // pick fell out of the selection.
+    if (!state.bulkMergeTargetId || chosen.every(function(j){ return j.id !== state.bulkMergeTargetId; })){
+      state.bulkMergeTargetId = chosen.slice().sort(byRecentJobActivity)[0].id;
+    }
+    var target = chosen.filter(function(j){ return j.id === state.bulkMergeTargetId; })[0];
+
+    var html = '<div class="card">';
+    html += '<button type="button" class="btn btn-ghost" data-action="back-to-bulk-select" style="margin-bottom:8px; padding-left:0">&larr; Back to selection</button>';
+    html += '<div class="section-title">Merge '+chosen.length+' jobs into one</div>';
+    html += '<p class="section-sub">Pick which one everything moves onto &mdash; all the visits from the others join it, and those close out. This can\'t be undone.</p>';
+
+    chosen.forEach(function(j){
+      var isTarget = j.id === state.bulkMergeTargetId;
+      var latestLog = jobLogsFor(j.id)[0];
+      html += '<div class="review-row'+(isTarget?" picked":"")+'" data-pick-bulk-target="'+esc(j.id)+'">';
+      html += '<div class="review-radio"></div><div><div class="rv-venue">'+esc(j.venue)+(isTarget?'<span class="keep-tag">KEEP THIS ONE</span>':'')+'</div>';
+      var metaBits = [];
+      if (latestLog && latestLog.date) metaBits.push(fmtDay(latestLog.date));
+      if (j.assignedEmployees && j.assignedEmployees.length) metaBits.push(j.assignedEmployees.join(", "));
+      html += '<div class="rv-meta">'+esc(metaBits.join(" · "))+'</div></div></div>';
+    });
+
+    var renameValue = (state.bulkMergeRenameOverride != null) ? state.bulkMergeRenameOverride : target.venue;
+    html += field("Name this job (optional)", '<input type="text" id="bulk-merge-name-input" value="'+esc(renameValue)+'">');
+    html += '<p class="hint" style="margin-top:-8px">Leave as is to keep the current name, or give the combined job a clearer one. This updates every visit already logged, so it all reads the same everywhere (timesheets included).</p>';
+    html += '<div style="display:flex; gap:10px; margin-top:12px;">';
+    html += '<button type="button" class="btn btn-primary" data-action="confirm-bulk-merge" '+(state.bulkMergeBusy?"disabled":"")+'>'+(state.bulkMergeBusy?"Merging…":"Merge "+chosen.length+" jobs")+'</button>';
+    html += '</div></div>';
+    return html;
+  }
+
+  // Extends the same batch the single performMerge uses (see below) to any
+  // number of source jobs at once: every selected job's visits move onto
+  // targetId, each source job closes out as mergedInto targetId, and the
+  // target's venue/assignedEmployees update the same way a one-at-a-time
+  // merge already would.
+  function performBulkMerge(sourceIds, targetId, newName){
+    if (!db || !targetId || !sourceIds) return;
+    var target = state.jobs.filter(function(x){ return x.id === targetId; })[0];
+    var actualSources = sourceIds.filter(function(id){ return id !== targetId; });
+    if (!target || !actualSources.length) return;
+
+    var finalVenue = (newName && newName.trim()) ? newName.trim() : target.venue;
+    var now = new Date().toISOString();
+    var batch = db.batch();
+    var extraNames = [];
+
+    actualSources.forEach(function(sourceId){
+      var source = state.jobs.filter(function(x){ return x.id === sourceId; })[0];
+      if (!source) return;
+      var sourceLogs = state.jobLogs.filter(function(l){ return l.jobId === sourceId; });
+      sourceLogs.forEach(function(l){
+        batch.update(db.collection("job-logs").doc(l.id), { jobId: targetId, venue: finalVenue, mergedFromJobId: sourceId });
+      });
+      (source.assignedEmployees||[]).forEach(function(n){
+        if (extraNames.indexOf(n) === -1 && (target.assignedEmployees||[]).indexOf(n) === -1) extraNames.push(n);
+      });
+      batch.update(db.collection("jobs").doc(sourceId), { mergedInto: targetId, open: false, lastUpdatedAt: now });
+    });
+
+    if (finalVenue !== target.venue){
+      var targetLogs = state.jobLogs.filter(function(l){ return l.jobId === targetId; });
+      targetLogs.forEach(function(l){
+        batch.update(db.collection("job-logs").doc(l.id), { venue: finalVenue });
+      });
+    }
+
+    var targetPatch = { lastUpdatedAt: now, venue: finalVenue, isMerged: true };
+    if (extraNames.length) targetPatch.assignedEmployees = firebase.firestore.FieldValue.arrayUnion.apply(null, extraNames);
+    batch.update(db.collection("jobs").doc(targetId), targetPatch);
+
+    state.bulkMergeBusy = true; render();
+    batch.commit().then(function(){
+      toast("Merged " + actualSources.length + " job" + (actualSources.length===1?"":"s") + " into " + finalVenue);
+      state.bulkMergeActive = false; state.bulkMergeReviewing = false; state.bulkMergeSelected = [];
+      state.bulkMergeTargetId = null; state.bulkMergeRenameOverride = null; state.bulkMergeBusy = false;
+      state.viewingJobId = targetId;
+      render();
+    }).catch(function(){
+      state.bulkMergeBusy = false;
+      toast("Couldn't merge those jobs — try again.");
+      render();
+    });
   }
 
   // ---------- By crew: pick a crew member, see just their jobs ----------
@@ -3388,8 +3532,18 @@
 
   // ---------- events ----------
   function bindEvents(){
-    root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.editingJobId=null; state.viewingJobId=null; state.drewPricingView=false; render(); }); });
-    root.querySelectorAll("[data-mgmt]").forEach(function(b){ b.addEventListener("click", function(){ state.mgmtSub=b.getAttribute("data-mgmt"); render(); }); });
+    root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){
+      state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.editingJobId=null; state.viewingJobId=null; state.drewPricingView=false;
+      state.bulkMergeActive=false; state.bulkMergeSelected=[]; state.bulkMergeReviewing=false;
+      state.bulkMergeTargetId=null; state.bulkMergeRenameOverride=null;
+      render();
+    }); });
+    root.querySelectorAll("[data-mgmt]").forEach(function(b){ b.addEventListener("click", function(){
+      state.mgmtSub=b.getAttribute("data-mgmt");
+      state.bulkMergeActive=false; state.bulkMergeSelected=[]; state.bulkMergeReviewing=false;
+      state.bulkMergeTargetId=null; state.bulkMergeRenameOverride=null;
+      render();
+    }); });
 
     var logoutBtn = root.querySelector('[data-action="logout"]');
     if (logoutBtn) logoutBtn.addEventListener("click", function(){ state.session=null; clearSession(); state.loginName=""; state.loginPin=""; state.crewJobsTab="open"; render(); });
@@ -3724,6 +3878,55 @@
         if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
       });
     }
+
+    // ---- merge multiple jobs at once (see "Select to merge" on the Jobs tab) ----
+    var startBulkMergeBtn = root.querySelector('[data-action="start-bulk-merge"]');
+    if (startBulkMergeBtn) startBulkMergeBtn.addEventListener("click", function(){
+      state.bulkMergeActive = true; state.bulkMergeSelected = [];
+      state.bulkMergeTargetId = null; state.bulkMergeRenameOverride = null;
+      render();
+    });
+    var cancelBulkMergeBtn = root.querySelector('[data-action="cancel-bulk-merge"]');
+    if (cancelBulkMergeBtn) cancelBulkMergeBtn.addEventListener("click", function(){
+      state.bulkMergeActive = false; state.bulkMergeSelected = [];
+      state.bulkMergeTargetId = null; state.bulkMergeRenameOverride = null;
+      render();
+    });
+    root.querySelectorAll("[data-bulk-pick]").forEach(function(b){ b.addEventListener("click", function(){
+      var id = b.getAttribute("data-bulk-pick");
+      var idx = state.bulkMergeSelected.indexOf(id);
+      if (idx === -1) state.bulkMergeSelected.push(id); else state.bulkMergeSelected.splice(idx, 1);
+      render();
+    }); });
+    var reviewBulkMergeBtn = root.querySelector('[data-action="review-bulk-merge"]');
+    if (reviewBulkMergeBtn) reviewBulkMergeBtn.addEventListener("click", function(){
+      if (state.bulkMergeSelected.length < 2) return;
+      state.bulkMergeTargetId = null; state.bulkMergeRenameOverride = null;
+      state.bulkMergeReviewing = true;
+      render();
+    });
+    var backToBulkSelectBtn = root.querySelector('[data-action="back-to-bulk-select"]');
+    if (backToBulkSelectBtn) backToBulkSelectBtn.addEventListener("click", function(){
+      state.bulkMergeReviewing = false; state.bulkMergeTargetId = null; state.bulkMergeRenameOverride = null;
+      render();
+    });
+    root.querySelectorAll("[data-pick-bulk-target]").forEach(function(b){ b.addEventListener("click", function(){
+      // Keep whatever they've already typed in the rename box if it's a real
+      // custom name, rather than quietly overwriting it when they switch
+      // which job to keep.
+      var oldTarget = state.jobs.filter(function(j){ return j.id === state.bulkMergeTargetId; })[0];
+      var input = document.getElementById("bulk-merge-name-input");
+      if (input && oldTarget && input.value.trim() && input.value.trim() !== oldTarget.venue){
+        state.bulkMergeRenameOverride = input.value.trim();
+      }
+      state.bulkMergeTargetId = b.getAttribute("data-pick-bulk-target");
+      render();
+    }); });
+    var confirmBulkMergeBtn = root.querySelector('[data-action="confirm-bulk-merge"]');
+    if (confirmBulkMergeBtn) confirmBulkMergeBtn.addEventListener("click", function(){
+      var nameInput = document.getElementById("bulk-merge-name-input");
+      performBulkMerge(state.bulkMergeSelected, state.bulkMergeTargetId, nameInput ? nameInput.value : "");
+    });
 
     var startUnmergeBtn = root.querySelector('[data-action="start-unmerge"]');
     if (startUnmergeBtn) startUnmergeBtn.addEventListener("click", function(){
