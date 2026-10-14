@@ -466,6 +466,7 @@
     drewPricingView: false, drewSaving: false, drewSaved: false, drewPriceMsg: null,
     bulkMergeActive: false, bulkMergeSelected: [], bulkMergeReviewing: false,
     bulkMergeTargetId: null, bulkMergeRenameOverride: null, bulkMergeBusy: false,
+    crewJobSearch: "",
   };
 
   function esc(s){
@@ -915,10 +916,20 @@
     '</div>';
 
     var list = tab === "completed" ? doneJobs : notFinished;
+    var searchActive = tab === "open" && notFinished.length > 1;
+    if (searchActive){
+      html += field("Search your not-finished jobs", '<input type="text" id="crew-job-search-input" placeholder="e.g. Deer Park" value="'+esc(state.crewJobSearch||"")+'" autocomplete="off">');
+      var q = (state.crewJobSearch||"").trim().toLowerCase();
+      if (q){
+        list = list.filter(function(j){
+          return (j.venue||"").toLowerCase().indexOf(q) !== -1 || (j.jobDescription||"").toLowerCase().indexOf(q) !== -1;
+        });
+      }
+    }
     if (mine.length === 0){
       html += '<p class="empty-note">No jobs logged yet.</p>';
     } else if (list.length === 0){
-      html += '<p class="empty-note">'+(tab==="completed" ? "Nothing completed yet." : "Nothing outstanding — nice work.")+'</p>';
+      html += '<p class="empty-note">'+(tab==="completed" ? "Nothing completed yet." : (searchActive && state.crewJobSearch.trim() ? "No jobs match that search." : "Nothing outstanding — nice work."))+'</p>';
     } else {
       list.forEach(function(j){ html += renderJobCard(j, {employeeView:true}); });
     }
@@ -3841,7 +3852,7 @@
       });
     }
 
-    root.querySelectorAll("[data-crew-jobs-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.crewJobsTab=b.getAttribute("data-crew-jobs-tab"); render(); }); });
+    root.querySelectorAll("[data-crew-jobs-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.crewJobsTab=b.getAttribute("data-crew-jobs-tab"); state.crewJobSearch=""; render(); }); });
 
     var startMergeBtn = root.querySelector('[data-action="start-merge"]');
     if (startMergeBtn) startMergeBtn.addEventListener("click", function(){
@@ -3875,6 +3886,16 @@
         state.mergeQuery = mergeSearchInput.value;
         render();
         var el = document.getElementById("merge-search-input");
+        if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
+      });
+    }
+    var crewJobSearchInput = document.getElementById("crew-job-search-input");
+    if (crewJobSearchInput){
+      crewJobSearchInput.addEventListener("input", function(){
+        var pos = crewJobSearchInput.selectionStart;
+        state.crewJobSearch = crewJobSearchInput.value;
+        render();
+        var el = document.getElementById("crew-job-search-input");
         if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
       });
     }
