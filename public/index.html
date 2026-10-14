@@ -322,7 +322,7 @@
   .job-card-selectable.job-card-picked{border-color:var(--accent); background:var(--accent-soft);}
   .job-check{position:absolute; left:14px; top:16px; width:22px; height:22px; border-radius:6px; border:2px solid var(--line); background:var(--surface); display:flex; align-items:center; justify-content:center; font-weight:800; color:#fff;}
   .job-card-picked .job-check{background:var(--accent); border-color:var(--accent);}
-  .jobs-grid .job-card-selectable{position:relative;}
+  .job-card-selectable{position:relative;}
   .select-bar{position:fixed; left:0; right:0; bottom:0; background:var(--accent-strong); color:#fff; padding:14px 18px; display:flex; align-items:center; justify-content:center; gap:14px; box-shadow:0 -4px 16px rgba(0,0,0,.18); z-index:5;}
   .select-bar-count{font-weight:800; font-size:16px;}
   .select-bar .btn-primary{background:var(--success); border-color:var(--success);}
@@ -454,6 +454,7 @@
     glossaryOpen: false,
     leaveLogs: [], editLeaveId: null, leaveType: "sick",
     subcontractorJobs: [], subJobBusy: false, subJobMsg: null, trashConfirmSubJobId: null,
+    subJobTarget: "none", subJobLinkQuery: "", subJobLinkJobId: null,
     materials: [], materialFormBusy: false, materialFormMsg: null,
     editingMaterialId: null, trashConfirmMaterialId: null,
     schedule: [],
@@ -2655,6 +2656,40 @@
     html += field("Date", '<input type="date" name="date" value="'+esc(todayStr())+'" required>');
     html += field("Amount charged ($, optional)", '<input type="number" name="amountCharged" step="0.01" min="0" placeholder="e.g. 450.00">');
     html += '</div>';
+
+    // Lets a subcontractor's job either stand alone (the old behaviour), show
+    // up in the main Jobs list as its own job, or fold straight into a job
+    // crew already logged — same search-and-pick pattern as merging two jobs
+    // (see renderMergePicker / the bulk-merge review screen), just reused
+    // here to pick the destination instead of a second source job.
+    var subTarget = state.subJobTarget || "none";
+    html += '<div class="field"><label>Add this to the main Jobs list?</label><div class="seg" data-seg="subJobTarget">' +
+      '<button type="button" data-val="none" class="'+(subTarget==="none"?"on":"")+'">No, just log it here</button>' +
+      '<button type="button" data-val="new" class="'+(subTarget==="new"?"on":"")+'">Yes, as a new job</button>' +
+      '<button type="button" data-val="existing" class="'+(subTarget==="existing"?"on":"")+'">Add to a job crew already made</button>' +
+    '</div></div>';
+    if (subTarget === "existing"){
+      html += field("Search crew jobs by venue", '<input type="text" id="sub-link-search-input" placeholder="e.g. Deer Park" value="'+esc(state.subJobLinkQuery||"")+'" autocomplete="off">');
+      var slq = (state.subJobLinkQuery||"").trim().toLowerCase();
+      var subLinkCandidates = nonInvoicedJobs().filter(function(j){
+        return !slq || (j.venue||"").toLowerCase().indexOf(slq)!==-1 || (j.jobDescription||"").toLowerCase().indexOf(slq)!==-1;
+      }).slice().sort(byRecentJobActivity).slice(0,8);
+      if (subLinkCandidates.length){
+        html += '<div style="display:flex; flex-direction:column; gap:8px; margin:4px 0 14px;">';
+        subLinkCandidates.forEach(function(j){
+          var picked = state.subJobLinkJobId === j.id;
+          html += '<div class="job-card job-card-tap job-card-selectable'+(picked?' job-card-picked':'')+'" data-pick-sub-link-job="'+esc(j.id)+'">';
+          html += '<div class="job-check">'+(picked?"&#10003;":"")+'</div>';
+          html += '<div class="log-venue">'+esc(j.venue)+'</div>';
+          if (j.jobDescription) html += '<div class="hint" style="margin-top:2px">'+esc(j.jobDescription)+'</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+      } else {
+        html += '<p class="hint" style="margin:4px 0 14px">No jobs match that search.</p>';
+      }
+    }
+
     html += '<button type="submit" class="btn btn-primary btn-block" '+(state.subJobBusy?"disabled":"")+'>'+(state.subJobBusy?"Saving…":"Log subcontractor job")+'</button>';
     html += '</form></div>';
 
@@ -2674,6 +2709,10 @@
           : '<span class="pill pill-neutral" style="border:1px dashed var(--line); background:transparent;">No amount</span>';
         html += '</div>';
         if (s.jobDescription) html += '<div class="log-desc" style="margin-top:8px">'+esc(s.jobDescription)+'</div>';
+        if (s.linkedJobId){
+          var linkedJob = state.jobs.filter(function(x){ return x.id === s.linkedJobId; })[0];
+          html += '<div class="hint" style="margin-top:8px">'+(linkedJob ? 'Added to the job for &ldquo;'+esc(linkedJob.venue)+'&rdquo;' : 'Added to the Jobs list')+'</div>';
+        }
         if (state.trashConfirmSubJobId === s.id){
           html += '<div class="msg msg-error" style="margin-top:10px">Delete this entry? It\'ll move to the Trash tab, where you can restore it any time.</div>';
           html += '<div style="display:flex; gap:10px; margin-top:10px;">' +
@@ -2701,20 +2740,67 @@
     var amtRaw = f.amountCharged.value.trim();
     var parsedAmt = parseFloat(amtRaw);
     var amountCharged = (amtRaw === "" || isNaN(parsedAmt)) ? null : Math.round(parsedAmt * 100) / 100;
+    var target = state.subJobTarget || "none";
 
     if (!name || !jobDescription || !date){
       state.subJobMsg = {type:"error", text:"Please fill in their name, the job details and the date."};
       render(); return;
     }
+    if (target === "existing" && !state.subJobLinkJobId){
+      state.subJobMsg = {type:"error", text:"Pick which job this belongs to, or switch back to “No, just log it here”."};
+      render(); return;
+    }
 
     state.subJobBusy = true; state.subJobMsg = null; render();
-    db.collection("subcontractor-jobs").add({
-      name: name, venue: venue, jobDescription: jobDescription, date: date,
-      amountCharged: amountCharged, createdBy: (state.session && state.session.name) || "",
-      createdAt: new Date().toISOString(),
+
+    // Writing the job-log entry is what actually makes the subcontractor's
+    // visit show up everywhere a job's logged visits already show up (the
+    // job detail timeline, the Drew pricing screen's per-visit rows and
+    // materials total, date-grouping on the Jobs tab) — employees stays
+    // empty so it's never mistaken for crew hours. See jobLogsFor().
+    function addSubJobLog(jobId, jobVenue){
+      var now = new Date().toISOString();
+      return db.collection("job-logs").add({
+        jobId: jobId, venue: jobVenue, date: date, employees: [],
+        submittedBy: name + " (subcontractor)", alsoOnsite: ALONE_TEXT,
+        hours: "", materials: jobDescription, materialsCost: amountCharged,
+        completed: true, crewDone: false, isSubcontractorEntry: true,
+        submittedAt: now, trashed: false,
+      }).then(function(){
+        return db.collection("jobs").doc(jobId).update({ lastUpdatedAt: now });
+      });
+    }
+
+    var chain;
+    var linkedJobId = null;
+    if (target === "new"){
+      var now = new Date().toISOString();
+      chain = db.collection("jobs").add({
+        venue: venue || name, jobDescription: jobDescription, client: null,
+        status: "completed", open: false, trashed: false, assignedEmployees: [],
+        isSubcontractorJob: true, createdAt: now, lastUpdatedAt: now,
+      }).then(function(jobRef){
+        linkedJobId = jobRef.id;
+        return addSubJobLog(jobRef.id, venue || name);
+      });
+    } else if (target === "existing"){
+      var targetJob = state.jobs.filter(function(j){ return j.id === state.subJobLinkJobId; })[0];
+      linkedJobId = state.subJobLinkJobId;
+      chain = addSubJobLog(targetJob.id, targetJob.venue);
+    } else {
+      chain = Promise.resolve();
+    }
+
+    chain.then(function(){
+      return db.collection("subcontractor-jobs").add({
+        name: name, venue: venue, jobDescription: jobDescription, date: date,
+        amountCharged: amountCharged, createdBy: (state.session && state.session.name) || "",
+        createdAt: new Date().toISOString(), linkedJobId: linkedJobId,
+      });
     }).then(function(){
       state.subJobBusy = false;
-      toast("Logged " + name + "'s job");
+      state.subJobTarget = "none"; state.subJobLinkQuery = ""; state.subJobLinkJobId = null;
+      toast("Logged " + name + "'s job" + (linkedJobId ? " and added it to the Jobs list" : ""));
       render();
     }).catch(function(){
       state.subJobBusy = false;
@@ -3553,6 +3639,7 @@
       state.mgmtSub=b.getAttribute("data-mgmt");
       state.bulkMergeActive=false; state.bulkMergeSelected=[]; state.bulkMergeReviewing=false;
       state.bulkMergeTargetId=null; state.bulkMergeRenameOverride=null;
+      state.subJobTarget="none"; state.subJobLinkQuery=""; state.subJobLinkJobId=null;
       render();
     }); });
 
@@ -3699,6 +3786,11 @@
           }
           if (name === "crewRole"){ state.crewRole = b.getAttribute("data-val"); }
           if (name === "jobsFilter"){ state.jobsStatusFilter = b.getAttribute("data-val"); render(); }
+          if (name === "subJobTarget"){
+            state.subJobTarget = b.getAttribute("data-val");
+            if (state.subJobTarget !== "existing"){ state.subJobLinkQuery = ""; state.subJobLinkJobId = null; }
+            render();
+          }
           if (name === "alsoOnsiteMode"){
             var val = b.getAttribute("data-val");
             var nameField = document.getElementById("also-onsite-name-field");
@@ -4141,6 +4233,24 @@
       });
       subNameInput.addEventListener("blur", function(){ setTimeout(function(){ subNameSuggestions.hidden = true; }, 120); });
     }
+
+    // Choosing "Add to a job crew already made" shows a venue search +
+    // pick-list (same idea as the merge/bulk-merge pickers) for which
+    // existing job this subcontractor's visit folds into.
+    var subLinkSearchInput = document.getElementById("sub-link-search-input");
+    if (subLinkSearchInput){
+      subLinkSearchInput.addEventListener("input", function(){
+        var pos = subLinkSearchInput.selectionStart;
+        state.subJobLinkQuery = subLinkSearchInput.value;
+        render();
+        var el = document.getElementById("sub-link-search-input");
+        if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
+      });
+    }
+    root.querySelectorAll("[data-pick-sub-link-job]").forEach(function(b){ b.addEventListener("click", function(){
+      state.subJobLinkJobId = b.getAttribute("data-pick-sub-link-job");
+      render();
+    }); });
 
     var askTrashSubJobBtn = root.querySelector('[data-ask-trash-sub-job]');
     if (askTrashSubJobBtn) askTrashSubJobBtn.addEventListener("click", function(){
