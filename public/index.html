@@ -316,6 +316,15 @@
   .drew-save-btn:disabled{opacity:.6; cursor:default;}
   .drew-back{font-size:16px; font-weight:700;}
   .drew-saved-msg{margin-top:16px; background:var(--success-soft); color:var(--success); font-weight:700; font-size:18px; text-align:center; padding:14px; border-radius:10px;}
+  .drew-desc-label{font-size:13px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.03em; display:block; margin-top:14px;}
+  .drew-desc-edit{width:100%; font-size:19px; color:var(--ink); background:var(--surface); border:2px solid var(--line); border-radius:10px; padding:12px 14px; margin-top:8px; font-family:inherit; resize:vertical; min-height:70px;}
+  .drew-desc-edit:focus{outline:none; border-color:var(--accent);}
+  .drew-edit-hint{font-size:13px; color:var(--ink-faint); margin-top:6px;}
+  .drew-comments-box{margin-top:24px; padding:22px; background:var(--amber-soft); border:2px solid var(--amber); border-radius:14px;}
+  .drew-comments-label{font-size:19px; font-weight:700; color:var(--amber-ink); margin-bottom:4px;}
+  .drew-comments-sub{font-size:14px; color:var(--amber-ink); opacity:.8; margin-bottom:12px;}
+  .drew-comments-input{width:100%; font-size:18px; color:var(--ink); background:var(--surface); border:2px solid var(--amber); border-radius:10px; padding:14px; font-family:inherit; resize:vertical; min-height:90px;}
+  .drew-comments-input:focus{outline:none; border-color:var(--accent-strong);}
 
   /* "Select to merge" multi-pick mode on the Jobs tab, and its confirm screen. */
   .job-card-selectable{padding-left:42px; cursor:pointer; border:2px solid var(--line);}
@@ -1510,6 +1519,7 @@
     html += '</div>';
     html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">';
     if (j.isMerged){ html += '<span class="pill" style="background:var(--amber-soft); color:var(--amber-ink); border:1px solid var(--amber);">Combined job</span>'; }
+    if (!opts.employeeView && j.drewComments){ html += '<span class="pill" style="background:var(--amber-soft); color:var(--amber-ink); border:1px solid var(--amber);">&#128172; Note from Drew</span>'; }
     html += '<span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span>';
     if (!opts.employeeView && latestLog){
       if (latestLog.completed){
@@ -1625,6 +1635,7 @@
 
     if (j.jobDescription) html += '<div class="log-desc" style="margin-top:8px; font-size:14px">'+esc(j.jobDescription)+'</div>';
     if (admin && j.comments) html += '<div class="hint" style="margin-top:8px">Notes: '+esc(j.comments)+'</div>';
+    if (admin && j.drewComments) html += '<div class="msg" style="margin-top:8px; background:var(--amber-soft); color:var(--amber-ink); border:1px solid var(--amber); border-radius:8px; padding:10px 12px;"><strong>From Drew:</strong> '+esc(j.drewComments)+'</div>';
 
     // Only the actions used on most jobs, most of the time, sit in view by
     // default. Print/Copy for invoice/Send to Drew/Merge are all real
@@ -2358,7 +2369,11 @@
     var html = '<button type="button" class="btn btn-ghost drew-back" data-action="close-job-detail" style="margin-bottom:8px; padding-left:0">&larr; Back to the list</button>';
     html += '<div class="drew-card">';
     html += '<div class="drew-venue">'+esc(j.venue||"")+'</div>';
-    if (j.jobDescription) html += '<div class="drew-desc">'+esc(j.jobDescription)+'</div>';
+    // Editable so he can fix anything crew got wrong or left unclear before
+    // it gets priced — saved together with the price (see setDrewPrice).
+    html += '<label class="drew-desc-label" for="drew-desc-input">Job description</label>';
+    html += '<textarea id="drew-desc-input" class="drew-desc-edit">'+esc(j.jobDescription||"")+'</textarea>';
+    html += '<div class="drew-edit-hint">Fix anything that\'s wrong or unclear &mdash; Grace will see your edit.</div>';
 
     html += '<div class="drew-section-label">Who worked, and how long</div>';
     if (!logs.length){
@@ -2392,12 +2407,21 @@
       }
     }
 
+    // Optional note back to Grace — saved together with the price and his
+    // description edit (see setDrewPrice); shown to her on the job detail
+    // view and flagged with a pill on the job card so she doesn't miss it.
+    html += '<div class="drew-comments-box">';
+    html += '<div class="drew-comments-label">Comments for Grace</div>';
+    html += '<div class="drew-comments-sub">Optional &mdash; anything she should know before this gets invoiced.</div>';
+    html += '<textarea id="drew-comments-input" class="drew-comments-input" placeholder="e.g. Took longer than usual, the pipework underneath was badly corroded.">'+esc(j.drewComments||"")+'</textarea>';
+    html += '</div>';
+
     html += '<div class="drew-price-box">';
     html += '<div class="drew-price-label">What should this job be priced at?</div>';
     if (state.drewPriceMsg) html += '<div class="msg msg-error" style="margin-bottom:12px">'+esc(state.drewPriceMsg)+'</div>';
     html += '<div class="drew-price-input-wrap"><span class="drew-dollar">$</span>' +
       '<input type="text" inputmode="decimal" class="drew-price-input" id="drew-price-input" value="'+(j.invoiceAmount!=null?esc(Number(j.invoiceAmount).toFixed(2)):"")+'" placeholder="0.00"></div>';
-    html += '<button type="button" class="drew-save-btn" id="drew-save-btn" data-job-id="'+esc(j.id)+'" '+(state.drewSaving?"disabled":"")+'>'+(state.drewSaving?"SAVING…":"SAVE THIS PRICE")+'</button>';
+    html += '<button type="button" class="drew-save-btn" id="drew-save-btn" data-job-id="'+esc(j.id)+'" '+(state.drewSaving?"disabled":"")+'>'+(state.drewSaving?"SAVING…":"SAVE PRICE & NOTES")+'</button>';
     if (state.drewSaved) html += '<div class="drew-saved-msg" style="display:block">&#10003; Saved — Grace will see it straight away.</div>';
     html += '</div>';
 
@@ -3915,7 +3939,9 @@
     var drewSaveBtn = document.getElementById("drew-save-btn");
     if (drewSaveBtn) drewSaveBtn.addEventListener("click", function(){
       var input = document.getElementById("drew-price-input");
-      setDrewPrice(drewSaveBtn.getAttribute("data-job-id"), input ? input.value : "");
+      var descInput = document.getElementById("drew-desc-input");
+      var commentsInput = document.getElementById("drew-comments-input");
+      setDrewPrice(drewSaveBtn.getAttribute("data-job-id"), input ? input.value : "", descInput ? descInput.value : "", commentsInput ? commentsInput.value : "");
     });
     var toggleJobActionsBtn = root.querySelector('[data-action="toggle-job-actions"]');
     if (toggleJobActionsBtn) toggleJobActionsBtn.addEventListener("click", function(){ state.jobActionsOpen = !state.jobActionsOpen; render(); });
@@ -4766,7 +4792,7 @@
   // stamping onSubmitJobDetails already does for the invoice amount (see
   // below), just without needing the rest of that form (venue/description)
   // along for the ride.
-  function setDrewPrice(jobId, rawValue){
+  function setDrewPrice(jobId, rawValue, descValue, commentsValue){
     if (!db || !jobId) return;
     var trimmed = (rawValue || "").trim();
     var num = parseFloat(trimmed);
@@ -4778,6 +4804,9 @@
     var hadAmount = job && job.invoiceAmount != null && job.invoiceAmount !== "";
     var patch = { invoiceAmount: Math.round(num * 100) / 100 };
     if (!hadAmount) patch.pricedAt = new Date().toISOString();
+    var descTrimmed = (descValue || "").trim();
+    if (descTrimmed) patch.jobDescription = descTrimmed;
+    patch.drewComments = (commentsValue || "").trim() || null;
     state.drewSaving = true; state.drewPriceMsg = null; state.drewSaved = false; render();
     db.collection("jobs").doc(jobId).update(patch).then(function(){
       state.drewSaving = false; state.drewSaved = true;
