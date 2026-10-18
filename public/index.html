@@ -445,7 +445,7 @@
     formMsg: null, formBusy: false,
     jobsStatusFilter: "all",
     crewFormOpen: false, crewRole: "employee",
-    tsEmployee: null, tsWeekOffset: 0,
+    tsEmployee: null, tsWeekOffset: 0, overviewWeekOffset: 0,
     changePinOpen: false, changePinMsg: null,
     byCrewEmployee: null,
     venueQuery: "",
@@ -1382,7 +1382,13 @@
   }
 
   function renderOverview(){
-    var wk = weekBounds(0);
+    // Week-navigable, same pattern as Timesheets (weekBounds + weeknav) —
+    // lets Grace flip back through past weeks instead of Overview only
+    // ever showing the current one. "Open jobs"/"Active crew" stay as
+    // right-now counts either way, since there's no historical snapshot of
+    // those to look back at — only the logged-hours side of the stats, the
+    // crew breakdown and who was away move with the selected week.
+    var wk = weekBounds(state.overviewWeekOffset);
     var weekLogs = state.jobLogs.filter(function(l){ return !l.trashed && inRange(l.date, wk.startStr, wk.endStr); });
     var totalHours = weekLogs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
     var openCount = openJobs().length;
@@ -1392,8 +1398,9 @@
     var maxHrs = Math.max(1, Object.keys(byEmp).reduce(function(m,k){return Math.max(m,byEmp[k]);},0));
     var empRows = Object.keys(byEmp).sort(function(a,b){return byEmp[b]-byEmp[a];});
 
-    var html = '<div class="card"><div class="section-title">This week</div><p class="section-sub">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</p>';
-    html += '<div class="stat-grid">';
+    var html = '<div class="card"><div class="section-title">'+(state.overviewWeekOffset===0?"This week":"Week of "+fmtShort(wk.startStr))+'</div>';
+    html += '<div class="weeknav" style="margin-top:2px"><button data-overview-week="-1">&larr;</button><div class="label">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div><button data-overview-week="1" '+(state.overviewWeekOffset>=0?'disabled':'')+'>&rarr;</button></div>';
+    html += '<div class="stat-grid" style="margin-top:10px">';
     html += statTile(weekLogs.length, "Updates logged");
     html += statTile(totalHours.toFixed(1), "Hours logged");
     html += statTile(openCount, "Open jobs");
@@ -1413,13 +1420,13 @@
       html += '</div>';
     }
 
-    // Who's away this week (sick, annual, trade school, public holiday, unpaid) —
-    // pulled straight from leave-logs, same week window as the stats above.
+    // Who's away (sick, annual, trade school, public holiday, unpaid) —
+    // pulled straight from leave-logs, same selected week as the stats above.
     var leaveThisWeek = state.leaveLogs
       .filter(function(l){ return !l.trashed && inRange(l.date, wk.startStr, wk.endStr); })
       .slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
     if (leaveThisWeek.length){
-      html += '<div class="card"><div class="section-title" style="font-size:17px">Who\'s away this week</div>';
+      html += '<div class="card"><div class="section-title" style="font-size:17px">'+(state.overviewWeekOffset===0?"Who's away this week":"Who was away that week")+'</div>';
       leaveThisWeek.forEach(function(l){
         html += '<div class="crew-row"><div class="info"><div class="name">'+esc(l.employee)+'</div><div class="email">'+esc(leaveLabel(l.type))+'</div></div>' +
           '<div class="mono" style="color:var(--ink-soft); font-size:13px;">'+fmtDay(l.date)+'</div></div>';
@@ -1428,7 +1435,7 @@
     }
 
     html += '<div class="card"><div class="section-title" style="font-size:17px">Hours by crew member</div>';
-    if (empRows.length===0){ html += '<p class="empty-note">No jobs logged this week yet.</p>'; }
+    if (empRows.length===0){ html += '<p class="empty-note">No jobs logged that week.</p>'; }
     else { empRows.forEach(function(name){ var v=byEmp[name]; html += '<div class="bar-row"><div class="bar-name">'+esc(name)+'</div><div class="bar-track"><div class="bar-fill" style="width:'+(v/maxHrs*100)+'%"></div></div><div class="bar-val mono">'+v.toFixed(1)+'h</div></div>'; }); }
     html += '</div>';
 
@@ -3991,6 +3998,10 @@
     root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
 
     root.querySelectorAll("[data-ts-week]").forEach(function(b){ b.addEventListener("click", function(){ state.tsWeekOffset += parseInt(b.getAttribute("data-ts-week"),10); render(); }); });
+    root.querySelectorAll("[data-overview-week]").forEach(function(b){ b.addEventListener("click", function(){
+      state.overviewWeekOffset = Math.min(0, state.overviewWeekOffset + parseInt(b.getAttribute("data-overview-week"),10));
+      render();
+    }); });
     root.querySelectorAll("[data-copy-ts]").forEach(function(b){ b.addEventListener("click", function(){ copyTimesheetFor(b.getAttribute("data-copy-ts")); }); });
     root.querySelectorAll("[data-print-ts]").forEach(function(b){ b.addEventListener("click", function(){ printTimesheetFor(b.getAttribute("data-print-ts")); }); });
     root.querySelectorAll("[data-print-job]").forEach(function(b){ b.addEventListener("click", function(){ printJob(b.getAttribute("data-print-job")); }); });
