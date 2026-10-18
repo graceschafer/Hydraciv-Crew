@@ -455,7 +455,7 @@
     unmergeTargetId: null, unmergeSelected: [],
     trashConfirmJobId: null, trashConfirmLeaveId: null, trashConfirmLogId: null,
     openLogActionsId: null,
-    editingLogMaterialsCostId: null,
+    editingLogMaterialsCostId: null, editingLogDateId: null,
     syncError: false,
     isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false,
     editingCrewId: null, crewFormError: "",
@@ -1100,14 +1100,10 @@
   function renderEditLogView(){
     var log = state.jobLogs.filter(function(l){ return l.id === state.editLogId; })[0];
     if (!log){ return '<div class="card"><p class="empty-note">That entry isn\'t there anymore.</p><button type="button" class="btn btn-outline" data-action="back-to-list">&larr; Back</button></div>'; }
-    // Crew can edit a visit while its date is still in the current work week
-    // or the one just before it — stops timesheets shifting any further back
-    // than that once a week's closed out. Management isn't limited by this
-    // (checked here, not just by hiding the button, so it still holds even
-    // if the button was clicked before the window closed).
-    if (!isAdmin() && !isInEditableWeek(log.date)){
-      return '<div class="card"><p class="empty-note">That entry is from more than a week ago now, so it can\'t be edited here anymore — ask a manager if it needs a correction.</p><button type="button" class="btn btn-outline" data-action="back-to-list">&larr; Back</button></div>';
-    }
+    // Crew can edit any of their own logged visits, whatever its date and
+    // whatever state the job's in now — a mistake doesn't stop being a
+    // mistake just because a week's gone by. (isInEditableWeek is kept
+    // around only as a label for "this week / last week" elsewhere.)
     var job = state.jobs.filter(function(j){ return j.id === log.jobId; })[0];
     return renderJobForm({mode:"edit", job:job, log:log});
   }
@@ -1543,10 +1539,28 @@
   }
 
   function renderJobEditForm(j, opts){
+    // One screen, click Edit and fix anything — venue, description, and (if
+    // there's a logged visit) the date/hours/time/materials from the most
+    // recent one, all saved together. No separate "Edit this entry" detour
+    // needed for the common case of fixing a mistake right after logging
+    // it; Visit history still has its own per-visit edit for an older job
+    // with several visits where "the latest one" isn't the one that's wrong.
+    var latestLog = jobLogsFor(j.id)[0];
     var html = '<div class="job-card">';
-    html += '<form id="job-details-form" data-job-id="'+esc(j.id)+'">';
+    html += '<form id="job-details-form" data-job-id="'+esc(j.id)+'" data-latest-log-id="'+(latestLog?esc(latestLog.id):"")+'">';
     html += field("Venue / job site", '<input type="text" name="venue" value="'+esc(j.venue||"")+'" required>');
     html += field("Job description", '<textarea name="jobDescription" required>'+esc(j.jobDescription||"")+'</textarea>');
+    if (latestLog){
+      html += '<div class="row2">';
+      html += field("Date", '<input type="date" name="logDate" value="'+esc(latestLog.date||todayStr())+'" required>');
+      html += field("Hours worked", '<input type="text" name="logHours" value="'+esc(latestLog.hours||"")+'" placeholder="e.g. 6.5 or 6.5h">');
+      html += '</div>';
+      html += field("Time", '<input type="text" name="logTimeRange" value="'+esc(latestLog.timeRange||"")+'" placeholder="e.g. 7am&ndash;10am">');
+      html += field("Materials used", '<textarea name="logMaterials" placeholder="e.g. 2x 25mm ball valves">'+esc(latestLog.materials||"")+'</textarea>');
+      if (jobLogsFor(j.id).length > 1){
+        html += '<p class="hint" style="margin-top:-6px">This updates the most recent visit ('+esc(fmtDay(latestLog.date))+'). To fix an older visit on this job, open it from Visit history instead.</p>';
+      }
+    }
     if (opts.admin){
       // Crew pick this when they start a job on site, and it's easy to tap
       // the wrong pub group in a hurry — this is management's way to fix it
@@ -1727,7 +1741,10 @@
         var entries = byDate[d];
         html += '<div style="margin-top:10px"><strong style="font-size:13px">'+fmtDay(d)+'</strong>';
         entries.forEach(function(l){
-          var canChange = admin || isInEditableWeek(l.date);
+          // Everyone can fix their own logged visit, whatever its date or
+          // how far along the job is now — no more "ask a manager" once a
+          // week's gone by.
+          var canChange = true;
           var dotColor = l.completed ? "var(--success)" : (l.crewDone ? "var(--amber)" : "var(--warning)");
           var statusText = l.completed ? "Completed" : (l.crewDone ? "My part done" : "Follow-up");
           html += '<div class="visit-row"><div class="vr-line1">';
@@ -1756,13 +1773,21 @@
           if (l.alsoOnsite) html += '<div class="vr-sub">'+(l.alsoOnsite===ALONE_TEXT?"Worked alone":"Also onsite: "+esc(l.alsoOnsite))+'</div>';
           if (!l.completed && l.remainingWork) html += '<div class="vr-sub">Still to do: '+esc(l.remainingWork)+'</div>';
           if (l.crewDone) html += '<div class="vr-sub">Who\'s going back: '+(l.handoffUnsure?"Not sure yet":esc(l.handoffTo||"—"))+'</div>';
-          if (!canChange) html += '<div class="vr-sub">From a previous work week &mdash; ask a manager to change or delete it.</div>';
-          html += '</div>';
-          if (canChange){
-            html += '<button type="button" class="vr-kebab" data-toggle-log-actions="'+esc(l.id)+'">&#8942;</button>';
+          // One-tap date fix, right on the visit — no digging through "Edit
+          // this entry" just to change the day it happened.
+          if (state.editingLogDateId === l.id){
+            html += '<form data-log-date-form="'+esc(l.id)+'" style="display:flex; align-items:center; gap:6px; margin-top:6px;">' +
+              '<input type="date" name="logDate" value="'+esc(l.date||"")+'" style="padding:4px 6px; font-size:13px;">' +
+              '<button type="submit" class="btn btn-primary btn-sm" style="padding:3px 10px;">Save</button>' +
+              '<button type="button" class="btn btn-ghost btn-sm" style="padding:3px 6px;" data-cancel-log-date="'+esc(l.id)+'">Cancel</button>' +
+            '</form>';
+          } else {
+            html += '<button type="button" class="vr-sub" style="display:block; background:none; border:none; padding:0; cursor:pointer; color:var(--accent); font-weight:700; text-align:left; text-decoration:underline; margin-top:2px;" data-change-log-date="'+esc(l.id)+'">Change date</button>';
           }
+          html += '</div>';
+          html += '<button type="button" class="vr-kebab" data-toggle-log-actions="'+esc(l.id)+'">&#8942;</button>';
           html += '</div>'; // vr-line1
-          if (canChange && state.openLogActionsId === l.id){
+          if (state.openLogActionsId === l.id){
             if (state.trashConfirmLogId === l.id){
               html += '<div class="msg msg-error" style="margin-top:6px; margin-left:16px">Delete this entry? ' + (admin ? 'It\'ll move to the Trash tab, restorable any time.' : 'If that\'s a mistake, ask a manager to restore it.') + '</div>' +
                 '<div style="display:flex; gap:8px; margin-top:6px; margin-left:16px;">' +
@@ -2102,11 +2127,10 @@
 
   // Deletes one logged visit, not the whole job — e.g. a duplicate or wrong
   // entry. Same soft-delete/Trash-tab pattern as everything else. Crew can
-  // only do this (and edit) while the visit's date is in the current work
-  // week or the one just before it (isInEditableWeek) — management isn't
-  // limited by that. Either way, the job's open/follow-up status gets
-  // re-checked afterwards, since deleting or restoring a visit can change
-  // which update is "the latest".
+  // do this (and edit) on any of their own visits, whatever its date or the
+  // job's progress — no "ask a manager" window anymore. Either way, the
+  // job's open/follow-up status gets re-checked afterwards, since deleting
+  // or restoring a visit can change which update is "the latest".
   function trashLog(logId){
     if (!db || !logId) return;
     var l = state.jobLogs.filter(function(x){ return x.id===logId; })[0];
@@ -3749,6 +3773,19 @@
       quickSetMaterialsCost(logId, input ? input.value : "");
     }); });
 
+    root.querySelectorAll("[data-change-log-date]").forEach(function(b){ b.addEventListener("click", function(){
+      state.editingLogDateId = b.getAttribute("data-change-log-date"); render();
+    }); });
+    root.querySelectorAll("[data-cancel-log-date]").forEach(function(b){ b.addEventListener("click", function(){
+      state.editingLogDateId = null; render();
+    }); });
+    root.querySelectorAll("[data-log-date-form]").forEach(function(f){ f.addEventListener("submit", function(e){
+      e.preventDefault();
+      var logId = f.getAttribute("data-log-date-form");
+      var input = f.querySelector('input[name="logDate"]');
+      quickSetLogDate(logId, input ? input.value : "");
+    }); });
+
     var newLeaveBtn = root.querySelector('[data-action="new-leave"]');
     if (newLeaveBtn) newLeaveBtn.addEventListener("click", function(){ state.logView="leave"; state.formMsg=null; render(); });
     var viewTimesheetBtn = root.querySelector('[data-action="view-timesheet"]');
@@ -3930,7 +3967,7 @@
     root.querySelectorAll("[data-job-status-select]").forEach(function(sel){
       sel.addEventListener("change", function(){ setJobStatus(sel.getAttribute("data-job-status-select"), sel.value); });
     });
-    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; render(); }); });
+    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; state.editingLogDateId = null; render(); }); });
     root.querySelectorAll("[data-view-job-drew]").forEach(function(b){ b.addEventListener("click", function(){
       state.viewingJobId = b.getAttribute("data-view-job-drew");
       state.drewPricingView = true; state.drewSaved = false; state.drewPriceMsg = null;
@@ -3938,7 +3975,7 @@
     }); });
     var closeJobDetailBtn = root.querySelector('[data-action="close-job-detail"]');
     if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){
-      state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null;
+      state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null; state.editingLogDateId=null;
       state.drewPricingView=false; state.drewSaving=false; state.drewSaved=false; state.drewPriceMsg=null;
       render();
     });
@@ -4794,6 +4831,20 @@
       .catch(function(){ toast("Couldn't save that — try again."); });
   }
 
+  // Same idea, for the date — the one-tap "Change date" link on a visit
+  // (see renderJobDetailView), instead of opening the full "Edit this
+  // entry" form just to fix which day it was.
+  function quickSetLogDate(logId, rawValue){
+    if (!db || !logId) return;
+    var trimmed = (rawValue || "").trim();
+    if (!trimmed){ toast("Pick a date."); return; }
+    db.collection("job-logs").doc(logId).update({
+      date: trimmed, editedBy: (state.session && state.session.name) || "", editedAt: new Date().toISOString(),
+    }).then(function(){
+      state.editingLogDateId = null; toast("Date updated"); render();
+    }).catch(function(){ toast("Couldn't save that — try again."); });
+  }
+
   // The big "SAVE THIS PRICE" button's save — same patch shape and pricedAt
   // stamping onSubmitJobDetails already does for the invoice amount (see
   // below), just without needing the rest of that form (venue/description)
@@ -4863,7 +4914,24 @@
       else if (!hasAmount) patch.pricedAt = null;
     }
     if (f.comments) patch.comments = f.comments.value.trim();
-    db.collection("jobs").doc(jobId).update(patch).then(function(){
+
+    // The most recent visit's own fields ride along in the same save when
+    // this form showed them (see renderJobEditForm) — one "Save details"
+    // tap fixes the job info and the visit that was wrong, together.
+    var latestLogId = f.getAttribute("data-latest-log-id");
+    var logPatch = null;
+    if (latestLogId && f.logDate){
+      logPatch = {
+        date: f.logDate.value, hours: f.logHours ? f.logHours.value.trim() : "",
+        timeRange: f.logTimeRange ? f.logTimeRange.value.trim() : "",
+        materials: f.logMaterials ? f.logMaterials.value.trim() : "",
+        venue: venue, editedBy: (state.session && state.session.name) || "", editedAt: new Date().toISOString(),
+      };
+    }
+
+    var jobSave = db.collection("jobs").doc(jobId).update(patch);
+    var logSave = logPatch ? db.collection("job-logs").doc(latestLogId).update(logPatch) : Promise.resolve();
+    Promise.all([jobSave, logSave]).then(function(){
       state.editingJobId = null; toast("Job details updated"); render();
     }).catch(function(){ toast("Couldn't save those details."); });
   }
