@@ -1574,7 +1574,13 @@
     if (!j){
       return '<div class="card">'+backBtn+'<p class="empty-note">That job isn\'t there anymore.</p></div>';
     }
-    var admin = isAdmin() && state.activeTab === "management";
+    // An actual admin (Grace) gets full admin fields on a job no matter which
+    // tab she opened it from — she can land here from "Log a Job" too (e.g.
+    // opening one of her own logged jobs), and there's no reason she should
+    // see the stripped-down crew view of her own data just because of that.
+    // Leads are the ones meant to see a simpler view outside Management —
+    // see leadBrowsing below, which stays tab-scoped on purpose.
+    var admin = isAdmin();
     // A lead (Jayden) browsing the shared "everyone's jobs" list under
     // Management sees a read-only view — no editing, no add-update, no
     // trash — so his own personal jobs (logged from the Log a Job tab, where
