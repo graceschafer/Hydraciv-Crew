@@ -3738,7 +3738,12 @@
     if (newJobBtn) newJobBtn.addEventListener("click", function(){ state.logView="new"; state.formMsg=null; state.continuingDraftId=null; render(); });
     root.querySelectorAll("[data-add-update]").forEach(function(b){ b.addEventListener("click", function(){ state.logView="update"; state.updateJobId=b.getAttribute("data-add-update"); state.formMsg=null; state.continuingDraftId=null; render(); }); });
     var backBtn = root.querySelector('[data-action="back-to-list"]');
-    if (backBtn) backBtn.addEventListener("click", function(){ state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.myScheduleFormOpen=false; state.myScheduleFormMsg=null; state.continuingDraftId=null; render(); });
+    if (backBtn) backBtn.addEventListener("click", function(){
+      // Flush whatever's on the job form to a draft before leaving, so
+      // backing out without submitting never silently loses it.
+      autoSaveJobFormDraft();
+      state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.myScheduleFormOpen=false; state.myScheduleFormMsg=null; state.continuingDraftId=null; render();
+    });
 
     // drafts — saved only on this device (see draftsKey/loadDrafts above),
     // never through db/Firestore, so these never touch management's view.
@@ -3880,6 +3885,12 @@
     if (jobForm) jobForm.addEventListener("submit", onSubmitJobForm);
     var saveDraftBtn = document.getElementById("save-draft-btn");
     if (saveDraftBtn) saveDraftBtn.addEventListener("click", onSaveDraft);
+    // Silent auto-save while typing (new job / update only — see
+    // autoSaveJobFormDraft) — debounced so it's not writing to localStorage
+    // on every single keystroke, just a beat after they pause.
+    if (jobForm && (jobForm.getAttribute("data-mode") === "new" || jobForm.getAttribute("data-mode") === "update")){
+      jobForm.addEventListener("input", scheduleAutoSaveJobFormDraft);
+    }
     bindContractionFixes(jobForm);
 
     // "Not sure yet" on estimated return date — clears and disables the date
@@ -4665,21 +4676,19 @@
     });
   }
 
-  // "Save as draft" — a type="button" click, not a form submit, so none of
-  // the form's "required" fields block it: a draft can be as half-finished
-  // as it needs to be. Goes to localStorage only (see draftsKey/saveDrafts
-  // above), never anywhere near Firestore, so management never sees it.
-  function onSaveDraft(){
-    var f = document.getElementById("job-form");
-    if (!f) return;
-    var mode = f.getAttribute("data-mode");
+  // Builds a draft from whatever's currently in #job-form and saves it to
+  // this device (see draftsKey/saveDrafts above), reused by both the manual
+  // "Save as draft" button and the silent auto-save below so the two can
+  // never drift apart on what counts as "enough to save" or how a draft is
+  // shaped. Keyed off state.continuingDraftId so repeated calls (every
+  // auto-save tick, then Back, then a manual Save) update the same draft
+  // instead of piling up duplicates. Returns false if there's nothing worth
+  // keeping yet.
+  function saveJobFormAsDraft(f, mode){
     var fl = readJobFormFields(f);
     var hasContent = fl.jobDescription || fl.hours || fl.timeRange || fl.materials ||
       fl.alsoOnsiteMode === "alone" || fl.alsoOnsite || (mode === "new" && fl.venue);
-    if (!hasContent){
-      state.formMsg = {type:"error", text:"Nothing to save yet — fill something in first."};
-      render(); return;
-    }
+    if (!hasContent) return false;
     var me = state.session.name;
     var draft = Object.assign({}, fl, {
       mode: mode,
@@ -4694,10 +4703,49 @@
       drafts.unshift(draft);
     }
     saveDrafts(me, drafts);
+    state.continuingDraftId = draft.id;
+    return true;
+  }
+
+  // "Save as draft" — a type="button" click, not a form submit, so none of
+  // the form's "required" fields block it: a draft can be as half-finished
+  // as it needs to be. Goes to localStorage only, never anywhere near
+  // Firestore, so management never sees it.
+  function onSaveDraft(){
+    var f = document.getElementById("job-form");
+    if (!f) return;
+    var mode = f.getAttribute("data-mode");
+    if (!saveJobFormAsDraft(f, mode)){
+      state.formMsg = {type:"error", text:"Nothing to save yet — fill something in first."};
+      render(); return;
+    }
     state.continuingDraftId = null;
     state.logView = "list"; state.updateJobId = null; state.editLogId = null; state.formMsg = null;
     toast("Saved as a draft");
     render();
+  }
+
+  // Quietly keeps a draft up to date while someone's filling in a new job or
+  // an update, so nothing's lost if they close the app, switch away, or
+  // just back out without ever hitting Submit — they don't have to remember
+  // to tap "Save as draft" themselves. Never for "edit" mode (fixing an
+  // already-submitted entry) — the original stays in Firestore untouched
+  // either way, there's nothing to lose there. No render() in here on
+  // purpose: this fires on every keystroke (debounced below), and a full
+  // re-render would blow away focus/cursor position mid-type.
+  function autoSaveJobFormDraft(){
+    if (!state.session) return;
+    var f = document.getElementById("job-form");
+    if (!f) return;
+    var mode = f.getAttribute("data-mode");
+    if (mode !== "new" && mode !== "update") return;
+    saveJobFormAsDraft(f, mode);
+  }
+
+  var jobFormAutoSaveTimer = null;
+  function scheduleAutoSaveJobFormDraft(){
+    if (jobFormAutoSaveTimer) clearTimeout(jobFormAutoSaveTimer);
+    jobFormAutoSaveTimer = setTimeout(autoSaveJobFormDraft, 1500);
   }
 
   function onSubmitCrew(e){
@@ -4946,6 +4994,16 @@
       state.editingJobId = null; toast("Job details updated"); render();
     }).catch(function(){ toast("Couldn't save those details."); });
   }
+
+  // Extra safety net for the auto-save above, registered once (not inside
+  // bindEvents, which reruns every render — these would otherwise stack up
+  // a new listener each time): catches someone just closing the tab, or a
+  // phone locking/backgrounding the app, without ever tapping Back or
+  // Submit. autoSaveJobFormDraft() is a no-op whenever #job-form isn't on
+  // screen, so this is safe to fire from anywhere in the app.
+  document.addEventListener("visibilitychange", function(){ if (document.hidden) autoSaveJobFormDraft(); });
+  window.addEventListener("pagehide", function(){ autoSaveJobFormDraft(); });
+  window.addEventListener("beforeunload", function(){ autoSaveJobFormDraft(); });
 
   // ---------- boot ----------
   var firebaseConfig = {
