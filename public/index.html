@@ -1780,17 +1780,11 @@
           if (l.alsoOnsite) html += '<div class="vr-sub">'+(l.alsoOnsite===ALONE_TEXT?"Worked alone":"Also onsite: "+esc(l.alsoOnsite))+'</div>';
           if (!l.completed && l.remainingWork) html += '<div class="vr-sub">Still to do: '+esc(l.remainingWork)+'</div>';
           if (l.crewDone) html += '<div class="vr-sub">Who\'s going back: '+(l.handoffUnsure?"Not sure yet":esc(l.handoffTo||"—"))+'</div>';
-          // One-tap date fix, right on the visit — no digging through "Edit
-          // this entry" just to change the day it happened.
-          if (state.editingLogDateId === l.id){
-            html += '<form data-log-date-form="'+esc(l.id)+'" style="display:flex; align-items:center; gap:6px; margin-top:6px;">' +
-              '<input type="date" name="logDate" value="'+esc(l.date||"")+'" style="padding:4px 6px; font-size:13px;">' +
-              '<button type="submit" class="btn btn-primary btn-sm" style="padding:3px 10px;">Save</button>' +
-              '<button type="button" class="btn btn-ghost btn-sm" style="padding:3px 6px;" data-cancel-log-date="'+esc(l.id)+'">Cancel</button>' +
-            '</form>';
-          } else {
-            html += '<button type="button" class="vr-sub" style="display:block; background:none; border:none; padding:0; cursor:pointer; color:var(--accent); font-weight:700; text-align:left; text-decoration:underline; margin-top:2px;" data-change-log-date="'+esc(l.id)+'">Change date</button>';
-          }
+          // A visible "Edit this visit" button, right on the visit itself —
+          // on a merged job especially, this is what lets each visit be
+          // fixed individually (date, hours, time, materials, status —
+          // everything), instead of hunting for it behind the ⋮ menu.
+          html += '<button type="button" class="vr-sub" style="display:block; background:none; border:none; padding:0; cursor:pointer; color:var(--accent); font-weight:700; text-align:left; text-decoration:underline; margin-top:2px;" data-edit-log="'+esc(l.id)+'">&#9998; Edit this visit</button>';
           html += '</div>';
           html += '<button type="button" class="vr-kebab" data-toggle-log-actions="'+esc(l.id)+'">&#8942;</button>';
           html += '</div>'; // vr-line1
@@ -1803,7 +1797,6 @@
               '</div>';
             } else {
               html += '<div class="vr-actions">' +
-                '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0" data-edit-log="'+esc(l.id)+'">Edit this entry</button>' +
                 '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0; color:#b3261e" data-ask-trash-log="'+esc(l.id)+'">Delete</button>' +
               '</div>';
             }
@@ -3736,7 +3729,17 @@
     // job list actions
     var newJobBtn = root.querySelector('[data-action="new-job"]');
     if (newJobBtn) newJobBtn.addEventListener("click", function(){ state.logView="new"; state.formMsg=null; state.continuingDraftId=null; render(); });
-    root.querySelectorAll("[data-add-update]").forEach(function(b){ b.addEventListener("click", function(){ state.logView="update"; state.updateJobId=b.getAttribute("data-add-update"); state.formMsg=null; state.continuingDraftId=null; render(); }); });
+    root.querySelectorAll("[data-add-update]").forEach(function(b){ b.addEventListener("click", function(){
+      state.logView="update"; state.updateJobId=b.getAttribute("data-add-update"); state.formMsg=null; state.continuingDraftId=null;
+      // "Add update" can be clicked from inside the job detail view (viewingJobId
+      // still set) — without clearing it, render()'s dispatch order shows the job
+      // detail view again instead of the update form, and it looked like nothing
+      // happened until you hit Back (which cleared viewingJobId) and tried again
+      // from the list. Clear it here so the update form shows immediately.
+      state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null;
+      state.editingLogMaterialsCostId=null; state.editingLogDateId=null; state.drewPricingView=false;
+      render();
+    }); });
     var backBtn = root.querySelector('[data-action="back-to-list"]');
     if (backBtn) backBtn.addEventListener("click", function(){
       // Flush whatever's on the job form to a draft before leaving, so
@@ -3783,19 +3786,6 @@
       var logId = f.getAttribute("data-materials-cost-form");
       var input = f.querySelector('input[name="materialsCostQuick"]');
       quickSetMaterialsCost(logId, input ? input.value : "");
-    }); });
-
-    root.querySelectorAll("[data-change-log-date]").forEach(function(b){ b.addEventListener("click", function(){
-      state.editingLogDateId = b.getAttribute("data-change-log-date"); render();
-    }); });
-    root.querySelectorAll("[data-cancel-log-date]").forEach(function(b){ b.addEventListener("click", function(){
-      state.editingLogDateId = null; render();
-    }); });
-    root.querySelectorAll("[data-log-date-form]").forEach(function(f){ f.addEventListener("submit", function(e){
-      e.preventDefault();
-      var logId = f.getAttribute("data-log-date-form");
-      var input = f.querySelector('input[name="logDate"]');
-      quickSetLogDate(logId, input ? input.value : "");
     }); });
 
     var newLeaveBtn = root.querySelector('[data-action="new-leave"]');
