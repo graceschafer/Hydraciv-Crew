@@ -700,6 +700,14 @@
   // ordinary view (Overview, Jobs, By Crew, For Drew) and reachable only
   // from the dedicated Invoiced tab (or Trash, if one gets trashed).
   function nonInvoicedJobs(){ return visibleJobs().filter(function(j){ return j.status !== "invoiced"; }); }
+  // Once a job's sent to Drew and he hasn't priced it yet, Grace wants it out
+  // of the way on the main Jobs tab — the "For Drew" tab is where it lives
+  // until then. The moment it's priced (or taken back out of Drew's queue)
+  // it reappears here same as any other job — this only hides the "still
+  // waiting on Drew" window, not priced-and-waiting-to-invoice jobs.
+  function jobsOutsideDrewQueue(){
+    return nonInvoicedJobs().filter(function(j){ return !(j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount==="")); });
+  }
   function openJobs(){ return nonInvoicedJobs().filter(function(j){ return j.open !== false; }); }
 
   // Shared "newest activity first" sort for every job list on the Management
@@ -1465,9 +1473,9 @@
     if (state.glossaryOpen){
       html += '<div style="margin-top:8px; font-size:13.5px; line-height:1.6;">' +
         '<p><strong>Job statuses:</strong> Quoted (priced but not started) &middot; In-process (crew is working it) &middot; Completed (work\'s done, may still need pricing/invoicing) &middot; Invoiced (billed, fully closed out).</p>' +
-        '<p><strong>Jobs</strong> — every job ever logged; filter by status or search across all of them.</p>' +
+        '<p><strong>Jobs</strong> — every job ever logged, except ones currently waiting on Drew (see For Drew below); filter by status or search across all of them.</p>' +
         '<p><strong>By Crew</strong> — pick a crew member to see just their jobs.</p>' +
-        '<p><strong>For Drew</strong> — jobs flagged for pricing (the "Send to Drew for pricing" button on a job puts it here). Prices and notes here are never shown to crew.</p>' +
+        '<p><strong>For Drew</strong> — jobs flagged for pricing (the "Send to Drew for pricing" button on a job puts it here). While a job\'s waiting on a price, it\'s kept out of the Jobs tab so it\'s out of the way — it comes back as soon as it\'s priced (or taken out of Drew\'s queue). Prices and notes here are never shown to crew.</p>' +
         '<p><strong>Priced</strong> — has a price set, not yet marked Invoiced.</p>' +
         '<p><strong>Invoiced</strong> — billed and fully closed out. The moment a job is marked Invoiced it disappears from Overview, Jobs, By Crew, For Drew and Priced — this tab is the only place it still shows up.</p>' +
         '<p><strong>Trash</strong> — jobs someone moved out of the way (test entries, duplicates). Nothing is ever permanently deleted — anything here can be restored.</p>' +
@@ -2181,7 +2189,7 @@
 
     var html = '<div class="card">';
     html += '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">';
-    html += '<div><div class="section-title">Jobs</div><p class="section-sub" style="margin-bottom:0">Every job, its status, and who\'s on it.</p></div>';
+    html += '<div><div class="section-title">Jobs</div><p class="section-sub" style="margin-bottom:0">Every job, its status, and who\'s on it &mdash; except jobs waiting on Drew (see For Drew) and invoiced jobs (see Invoiced).</p></div>';
     // Merging more than two jobs used to mean repeating the merge flow one
     // pair at a time — this lets you tick everything that belongs together
     // and fold it into one job in a single step. Same admin-only gate as the
@@ -2210,13 +2218,13 @@
           return lhay.indexOf(q) !== -1;
         });
       }
-      // Searching looks across every non-invoiced job ever logged — invoiced
-      // jobs are kept out of the Jobs tab entirely, search included; see the
-      // Invoiced tab for those.
-      list = nonInvoicedJobs().filter(jobMatches);
-      html += '<p class="hint" style="margin:8px 0 0">Searching everything except invoiced jobs — see the Invoiced tab for those.</p>';
+      // Searching looks across every job on this tab's usual list — invoiced
+      // jobs and anything still waiting on Drew are kept out entirely, search
+      // included; see the Invoiced and For Drew tabs for those.
+      list = jobsOutsideDrewQueue().filter(jobMatches);
+      html += '<p class="hint" style="margin:8px 0 0">Searching everything except invoiced jobs and jobs waiting on Drew — see those tabs for those.</p>';
     } else {
-      list = nonInvoicedJobs();
+      list = jobsOutsideDrewQueue();
       if (state.jobsStatusFilter === "open") list = list.filter(function(j){return j.open!==false;});
       if (state.jobsStatusFilter === "closed") list = list.filter(function(j){return j.open===false;});
       // "Merged" is a home base for jobs that have absorbed one or more other
