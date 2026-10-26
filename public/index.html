@@ -1629,6 +1629,15 @@
     }
 
     var logs = jobLogsFor(j.id);
+    // On a merged job, a crew member should only ever see their own visits
+    // and their own hours — never the combined total, and never another
+    // crew member's logged visit, just because their jobs got merged
+    // together. Admins and a lead reviewing everyone's jobs under
+    // Management still see the whole, combined picture.
+    if (employeeView){
+      var me = state.session.name;
+      logs = logs.filter(function(l){ return l.employees && l.employees.indexOf(me) !== -1; });
+    }
     var html = '<div class="card">';
     html += backBtn;
 
@@ -1744,6 +1753,11 @@
         if (!byDate[l.date]){ byDate[l.date] = []; dateOrder.push(l.date); }
         byDate[l.date].push(l);
       });
+      // Logs are fetched newest-SUBMITTED-first, which isn't necessarily the
+      // same as newest-DATED-first (e.g. two visits get logged out of order,
+      // or a date gets corrected after the fact) — sort the date groups
+      // themselves into proper calendar order, most recent visit date on top.
+      dateOrder.sort(function(a,b){ return (b||"").localeCompare(a||""); });
       dateOrder.forEach(function(d){
         var entries = byDate[d];
         html += '<div style="margin-top:10px"><strong style="font-size:13px">'+fmtDay(d)+'</strong>';
