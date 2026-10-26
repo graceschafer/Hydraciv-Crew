@@ -405,6 +405,13 @@
   // state.crew.length alone.
   var crewLoaded = false;
 
+  // Scroll position to restore when backing out of a job's detail view —
+  // opening a job used to always leave you scrolled to the top of whatever
+  // list you opened it from. Kept outside `state` on purpose: it's a one-shot
+  // "where to land next" value, not something that should round-trip through
+  // drafts, resets, or anything else that touches state.
+  var returnScrollY = null;
+
   // sessionStorage (not localStorage) on purpose — it clears itself when the
   // tab/app is actually closed, so nobody stays signed in to someone else's
   // login just by reopening the app. A reload of the same open tab still
@@ -3989,8 +3996,16 @@
     root.querySelectorAll("[data-job-status-select]").forEach(function(sel){
       sel.addEventListener("change", function(){ setJobStatus(sel.getAttribute("data-job-status-select"), sel.value); });
     });
-    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){ state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; state.editingLogDateId = null; render(); }); });
+    root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){
+      // Only remember the scroll position the FIRST time we drill in — if
+      // a job links to another job (the "merged into X" redirect) we're
+      // still drilling further in, not backing out, so the original spot
+      // (back in the Jobs list, Overview, etc.) shouldn't get overwritten.
+      if (!state.viewingJobId) returnScrollY = window.scrollY;
+      state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; state.editingLogDateId = null; render();
+    }); });
     root.querySelectorAll("[data-view-job-drew]").forEach(function(b){ b.addEventListener("click", function(){
+      if (!state.viewingJobId) returnScrollY = window.scrollY;
       state.viewingJobId = b.getAttribute("data-view-job-drew");
       state.drewPricingView = true; state.drewSaved = false; state.drewPriceMsg = null;
       render();
@@ -4000,6 +4015,7 @@
       state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null; state.editingLogDateId=null;
       state.drewPricingView=false; state.drewSaving=false; state.drewSaved=false; state.drewPriceMsg=null;
       render();
+      if (returnScrollY != null){ window.scrollTo(0, returnScrollY); returnScrollY = null; }
     });
     var drewSaveBtn = document.getElementById("drew-save-btn");
     if (drewSaveBtn) drewSaveBtn.addEventListener("click", function(){
