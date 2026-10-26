@@ -469,6 +469,11 @@
     mergeNameConfirm: null, mergeNameBusy: false, mergeNameMsg: null,
     glossaryOpen: false,
     leaveLogs: [], editLeaveId: null, leaveType: "sick",
+    // Set when a manager adds a leave day on someone else's behalf from
+    // Timesheets (they forgot to log it themselves, but Grace knows they're
+    // away) — a top-level route like editLeaveId, so Back returns to
+    // Timesheets rather than the crew member's own list.
+    addingLeaveForEmployee: null,
     subcontractorJobs: [], subJobBusy: false, subJobMsg: null, trashConfirmSubJobId: null,
     subJobTarget: "none", subJobLinkQuery: "", subJobLinkJobId: null,
     materials: [], materialFormBusy: false, materialFormMsg: null,
@@ -737,6 +742,8 @@
       html += renderEditLogView();
     } else if (state.editLeaveId){
       html += renderLeaveEditView();
+    } else if (state.addingLeaveForEmployee){
+      html += renderAdminAddLeaveView();
     } else if (state.mergeSourceId){
       html += renderMergePicker();
     } else if (state.bulkMergeReviewing){
@@ -1132,6 +1139,19 @@
     return renderLeaveForm({mode:"edit", leave:leave});
   }
 
+  // Top-level route for a manager logging leave on someone else's behalf
+  // (they forgot to add it, but Grace knows they're away) — reached from
+  // Timesheets, see state.addingLeaveForEmployee. Back returns to
+  // Timesheets specifically, not wherever back-to-list would otherwise land.
+  function renderAdminAddLeaveView(){
+    // addingLeaveForEmployee is either a name (quick "+ Add leave" on an
+    // already-visible Timesheets card) or literally `true` (the general
+    // "+ Add leave for a crew member" button, no one picked yet) — either
+    // way the form itself carries the actual crew picker, see below.
+    var preset = (typeof state.addingLeaveForEmployee === "string") ? state.addingLeaveForEmployee : "";
+    return renderLeaveForm({mode:"new", adminMode:true, forEmployee: preset});
+  }
+
   function renderChangePinView(){
     var html = '<div class="card center-card">';
     html += '<button type="button" class="btn btn-ghost" data-action="close-change-pin" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
@@ -1265,12 +1285,20 @@
   function renderLeaveForm(opts){
     var leave = opts.leave || {};
     var isEdit = opts.mode === "edit";
+    var adminMode = !!opts.adminMode;
+    var forEmployee = opts.forEmployee || "";
     var type = isEdit ? (leave.type || "sick") : "sick";
     var html = '<div class="card">';
-    html += '<div class="section-title">'+(isEdit?"Edit leave day":"Add a leave day")+'</div>';
-    html += '<button type="button" class="btn btn-ghost" data-action="back-to-list" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    html += '<div class="section-title">'+(isEdit?"Edit leave day":(adminMode?"Add a leave day for a crew member":"Add a leave day"))+'</div>';
+    html += '<button type="button" class="btn btn-ghost" data-action="'+(adminMode?"close-admin-leave":"back-to-list")+'" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
     if (state.formMsg) html += '<div class="msg '+(state.formMsg.type==="error"?"msg-error":"msg-success")+'">'+esc(state.formMsg.text)+'</div>';
-    html += '<form id="leave-form" data-mode="'+opts.mode+'" '+(isEdit?('data-leave-id="'+esc(leave.id)+'"'):'')+'>';
+    html += '<form id="leave-form" data-mode="'+opts.mode+'" '+(isEdit?('data-leave-id="'+esc(leave.id)+'"'):'')+' '+(adminMode?'data-admin-mode="1"':'')+'>';
+    if (adminMode){
+      html += field("Crew member", '<select name="forEmployee" required><option value="" '+(forEmployee?"":"selected")+' disabled>Choose…</option>' +
+        activeCrew().map(function(c){ return '<option value="'+esc(c.name)+'" '+(forEmployee===c.name?"selected":"")+'>'+esc(c.name)+'</option>'; }).join("") +
+      '</select>');
+      html += '<p class="hint" style="margin:-6px 0 12px">This logs it under their name, the same as if they\'d added it themselves.</p>';
+    }
     html += '<div class="field"><label>Type</label><div class="seg" data-seg="leaveType">' +
       '<button type="button" data-val="sick" class="'+(type==="sick"?"on":"")+'">Sick day</button>' +
       '<button type="button" data-val="annual" class="'+(type==="annual"?"on":"")+'">Annual leave</button>' +
@@ -1297,6 +1325,13 @@
     if (!db) return;
     var f = e.target;
     var mode = f.getAttribute("data-mode");
+    var adminMode = f.getAttribute("data-admin-mode") === "1";
+    var forEmployee = (adminMode && f.forEmployee) ? f.forEmployee.value : "";
+    if (adminMode && !forEmployee){
+      state.formMsg = {type:"error", text:"Pick which crew member this leave day is for."};
+      render(); return;
+    }
+    var employee = forEmployee || state.session.name;
     var date = f.date.value;
     var dateTo = (mode !== "edit" && f.dateTo) ? f.dateTo.value : "";
     var typeOn = root.querySelector('#leave-form [data-seg="leaveType"] .on');
@@ -1323,16 +1358,21 @@
       p = db.collection("leave-logs").doc(id).update({type: type, date: date});
     } else {
       p = Promise.all(dates.map(function(d){
-        return db.collection("leave-logs").add({
-          employee: state.session.name, type: type, date: d, hours: leaveHours(type),
+        var patch = {
+          employee: employee, type: type, date: d, hours: leaveHours(type),
           createdAt: new Date().toISOString(),
-        });
+        };
+        // Leave a trace when a manager logs it on someone else's behalf —
+        // doesn't change anything crew see, just who actually added it.
+        if (forEmployee) patch.addedBy = (state.session && state.session.name) || "";
+        return db.collection("leave-logs").add(patch);
       }));
     }
     p.then(function(){
       state.formBusy = false; state.logView = "list"; state.editLeaveId = null;
+      state.addingLeaveForEmployee = null;
       toast(mode === "edit" ? "Leave day updated" :
-        (dates.length > 1 ? dates.length + " leave days logged (" + leaveLabel(type) + ")" : leaveLabel(type) + " logged"));
+        (dates.length > 1 ? dates.length + " leave days logged (" + leaveLabel(type) + (forEmployee ? " for " + forEmployee : "") + ")" : leaveLabel(type) + " logged" + (forEmployee ? " for " + forEmployee : "")));
       render();
     }).catch(function(){
       state.formBusy = false;
@@ -3387,6 +3427,11 @@
     var html = '<div class="card">';
     html += '<div><div class="section-title">Timesheets</div><p class="section-sub" style="margin-bottom:0">One block per crew member for the week below — hit Copy, then paste wherever you need it. Leave days (sick, annual, trade school, public holiday) show up here too at 7.6h, and leave without pay at 0h.</p></div>';
     html += '<div class="weeknav" style="margin-top:14px"><button data-ts-week="-1">&larr;</button><div class="label">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div><button data-ts-week="1">&rarr;</button></div>';
+    // Lives here (not tucked inside a per-person block) on purpose — someone
+    // who forgot to log anything and never added their own leave day won't
+    // show up in the list below at all, which is exactly the case this is
+    // for, so the button can't depend on their card already being there.
+    html += '<button type="button" class="btn btn-outline btn-sm" style="margin-top:12px" data-action="open-admin-leave">+ Add leave for a crew member</button>';
     html += '</div>';
 
     if (names.length === 0){
@@ -3401,6 +3446,7 @@
       html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">' +
         '<div><div class="section-title" style="font-size:17px">'+esc(name)+'</div>' +
         '<p class="section-sub" style="margin-bottom:0">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+' &middot; <span class="mono">'+total.toFixed(1)+'h</span></p></div>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-admin-leave-for="'+esc(name)+'">+ Add leave</button>' +
         '<button type="button" class="btn btn-outline btn-sm" data-copy-ts="'+esc(name)+'">Copy timesheet</button>' +
         '<button type="button" class="btn btn-ghost btn-sm" data-print-ts="'+esc(name)+'">Print</button>' +
       '</div>';
@@ -4037,6 +4083,13 @@
     root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
 
     root.querySelectorAll("[data-ts-week]").forEach(function(b){ b.addEventListener("click", function(){ state.tsWeekOffset += parseInt(b.getAttribute("data-ts-week"),10); render(); }); });
+    var openAdminLeaveBtn = root.querySelector('[data-action="open-admin-leave"]');
+    if (openAdminLeaveBtn) openAdminLeaveBtn.addEventListener("click", function(){ state.addingLeaveForEmployee = true; state.formMsg = null; render(); });
+    root.querySelectorAll("[data-admin-leave-for]").forEach(function(b){ b.addEventListener("click", function(){
+      state.addingLeaveForEmployee = b.getAttribute("data-admin-leave-for"); state.formMsg = null; render();
+    }); });
+    var closeAdminLeaveBtn = root.querySelector('[data-action="close-admin-leave"]');
+    if (closeAdminLeaveBtn) closeAdminLeaveBtn.addEventListener("click", function(){ state.addingLeaveForEmployee = null; state.formMsg = null; render(); });
     root.querySelectorAll("[data-overview-week]").forEach(function(b){ b.addEventListener("click", function(){
       state.overviewWeekOffset = Math.min(0, state.overviewWeekOffset + parseInt(b.getAttribute("data-overview-week"),10));
       render();
