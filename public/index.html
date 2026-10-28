@@ -4069,7 +4069,15 @@
       state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null; state.editingLogDateId=null;
       state.drewPricingView=false; state.drewSaving=false; state.drewSaved=false; state.drewPriceMsg=null;
       render();
-      if (returnScrollY != null){ window.scrollTo(0, returnScrollY); returnScrollY = null; }
+      // Scrolling right after swapping in the new (much taller) content
+      // doesn't reliably "take" on every phone browser — the layout isn't
+      // settled yet at this exact instant. Waiting two animation frames
+      // (the standard fix for this) makes sure it actually sticks instead
+      // of silently landing back at the top.
+      if (returnScrollY != null){
+        var y = returnScrollY; returnScrollY = null;
+        requestAnimationFrame(function(){ requestAnimationFrame(function(){ window.scrollTo(0, y); }); });
+      }
     });
     var drewSaveBtn = document.getElementById("drew-save-btn");
     if (drewSaveBtn) drewSaveBtn.addEventListener("click", function(){
