@@ -705,13 +705,14 @@
   // ordinary view (Overview, Jobs, By Crew, For Drew) and reachable only
   // from the dedicated Invoiced tab (or Trash, if one gets trashed).
   function nonInvoicedJobs(){ return visibleJobs().filter(function(j){ return j.status !== "invoiced"; }); }
-  // Once a job's sent to Drew and he hasn't priced it yet, Grace wants it out
-  // of the way on the main Jobs tab — the "For Drew" tab is where it lives
-  // until then. The moment it's priced (or taken back out of Drew's queue)
-  // it reappears here same as any other job — this only hides the "still
-  // waiting on Drew" window, not priced-and-waiting-to-invoice jobs.
+  // Once a job's sent to Drew, Grace wants it out of the way on the main
+  // Jobs tab entirely — whether or not it already had a price on it before
+  // (e.g. sending it back to Drew to re-check a price). It only reappears
+  // once it's taken back out of Drew's queue (needsPricing turned off
+  // again) — it's reachable on For Drew (if still unpriced) or Priced (if
+  // it already has a price) the whole time it's hidden here.
   function jobsOutsideDrewQueue(){
-    return nonInvoicedJobs().filter(function(j){ return !(j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount==="")); });
+    return nonInvoicedJobs().filter(function(j){ return !j.needsPricing; });
   }
   function openJobs(){ return nonInvoicedJobs().filter(function(j){ return j.open !== false; }); }
 
