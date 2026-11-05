@@ -321,6 +321,9 @@
   .drew-desc-edit{width:100%; font-size:19px; color:var(--ink); background:var(--surface); border:2px solid var(--line); border-radius:10px; padding:12px 14px; margin-top:8px; font-family:inherit; resize:vertical; min-height:70px;}
   .drew-desc-edit:focus{outline:none; border-color:var(--accent);}
   .drew-edit-hint{font-size:13px; color:var(--ink-faint); margin-top:6px;}
+  .drew-note-box{margin-top:14px; padding:16px; background:var(--accent-soft); border:2px solid var(--accent); border-radius:12px;}
+  .drew-note-label{font-size:14px; font-weight:700; color:var(--accent-strong); margin-bottom:4px;}
+  .drew-note-text{font-size:17px; color:var(--ink);}
   .drew-comments-box{margin-top:24px; padding:22px; background:var(--amber-soft); border:2px solid var(--amber); border-radius:14px;}
   .drew-comments-label{font-size:19px; font-weight:700; color:var(--amber-ink); margin-bottom:4px;}
   .drew-comments-sub{font-size:14px; color:var(--amber-ink); opacity:.8; margin-bottom:12px;}
@@ -491,6 +494,10 @@
     myCalendarMonthOffset: 0, myCalendarSelectedDate: null,
     continuingDraftId: null, trashConfirmDraftId: null,
     drewPricingView: false, drewSaving: false, drewSaved: false, drewPriceMsg: null,
+    // Opens a small inline note box right on "Send to Drew for pricing" —
+    // only when turning it ON (taking it back out of his queue stays a
+    // plain one-tap toggle, no note needed for that direction).
+    sendToDrewOpen: false,
     bulkMergeActive: false, bulkMergeSelected: [], bulkMergeReviewing: false,
     bulkMergeTargetId: null, bulkMergeRenameOverride: null, bulkMergeBusy: false,
     crewJobSearch: "",
@@ -1413,7 +1420,7 @@
   // gets Jobs (no prices — see renderJobsAdmin) and the shared Calendar.
   // Everything else (pricing queues, timesheets, subcontractor $, crew/PIN
   // management, trash) stays admin-only.
-  var MGMT_TABS_ADMIN = [["overview","Overview"],["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["invoiced","Invoiced"],["timesheets","Timesheets"],["materials","Materials"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]];
+  var MGMT_TABS_ADMIN = [["overview","Overview"],["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["invoiced","Invoiced"],["timesheets","Timesheets"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]];
   var MGMT_TABS_LEAD = [["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"]];
 
   function renderManagementTab(){
@@ -1618,6 +1625,15 @@
     html += '<form id="job-details-form" data-job-id="'+esc(j.id)+'" data-latest-log-id="'+(latestLog?esc(latestLog.id):"")+'">';
     html += field("Venue / job site", '<input type="text" name="venue" value="'+esc(j.venue||"")+'" required>');
     html += field("Job description", '<textarea name="jobDescription" required>'+esc(j.jobDescription||"")+'</textarea>');
+    if (opts.admin){
+      // Right up top, not buried below the visit fields and client picker —
+      // these are quick reference numbers Grace wants to grab and set
+      // without hunting for them every time.
+      html += '<div class="row2">';
+      html += field("VTASK number (optional)", '<input type="text" name="vtask" value="'+esc(j.vtask||"")+'">');
+      html += field("Purchase order (optional)", '<input type="text" name="poNumber" value="'+esc(j.poNumber||"")+'">');
+      html += '</div>';
+    }
     if (latestLog){
       html += '<div class="row2">';
       html += field("Date", '<input type="date" name="logDate" value="'+esc(latestLog.date||todayStr())+'" required>');
@@ -1638,8 +1654,6 @@
           return '<button type="button" data-val="'+esc(c)+'" class="'+(j.client===c?"on":"")+'">'+esc(c)+'</button>';
         }).join("") +
       '</div></div>';
-      html += field("VTASK number (optional)", '<input type="text" name="vtask" value="'+esc(j.vtask||"")+'">');
-      html += field("Purchase order (optional)", '<input type="text" name="poNumber" value="'+esc(j.poNumber||"")+'">');
       html += field("Invoice amount ($, optional)", '<input type="number" name="invoiceAmount" step="0.01" min="0" placeholder="e.g. 450.00" value="'+(j.invoiceAmount!=null?esc(j.invoiceAmount):"")+'">');
       html += field("Comments (optional, management only)", '<textarea name="comments" placeholder="Notes for whoever prices or reviews this job">'+esc(j.comments||"")+'</textarea>');
     }
@@ -1709,16 +1723,25 @@
     html += '<div class="job-head"><div><div class="log-venue" style="font-size:18px">'+esc(j.venue)+'</div>';
     var metaBits = [];
     if (j.assignedEmployees && j.assignedEmployees.length) metaBits.push(esc(j.assignedEmployees.join(", ")));
-    if (admin && j.vtask) metaBits.push('VTASK '+esc(j.vtask));
-    if (admin && j.poNumber) metaBits.push('PO '+esc(j.poNumber));
     if (j.client) metaBits.push(esc(j.client));
     if (metaBits.length) html += '<div class="log-meta" style="margin-top:4px">'+metaBits.join(' &middot; ')+'</div>';
     html += '</div>';
-    var priceBadge = "";
+    var priceBadge = "", vtaskBadge = "", poBadge = "";
     if (admin){
       priceBadge = (j.invoiceAmount != null && j.invoiceAmount !== "")
         ? '<button type="button" class="mono" style="background:none; border:none; padding:0; cursor:pointer; font-weight:700; font-size:13px; color:var(--success);" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">$'+Number(j.invoiceAmount).toFixed(2)+'</button>'
         : '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px; color:var(--ink-faint);" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">+ Add price</button>';
+      // VTASK/PO used to only show up as plain text here, and only once
+      // already set — nothing on the job detail screen ever invited you to
+      // add one, so they were easy to forget were there at all. These work
+      // just like the price badge above: tap either one, set or not, and
+      // it jumps straight into Edit job details.
+      vtaskBadge = j.vtask
+        ? '<button type="button" class="mono" style="background:none; border:none; padding:0; cursor:pointer; font-weight:700; font-size:13px; color:var(--ink-soft);" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">VTASK '+esc(j.vtask)+'</button>'
+        : '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px; color:var(--ink-faint);" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">+ Add VTASK</button>';
+      poBadge = j.poNumber
+        ? '<button type="button" class="mono" style="background:none; border:none; padding:0; cursor:pointer; font-weight:700; font-size:13px; color:var(--ink-soft);" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">PO '+esc(j.poNumber)+'</button>'
+        : '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px; color:var(--ink-faint);" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">+ Add PO</button>';
     }
     html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:5px;">';
     if (admin){
@@ -1728,7 +1751,7 @@
     } else {
       html += '<span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span>';
     }
-    html += priceBadge + '</div></div>';
+    html += priceBadge + vtaskBadge + poBadge + '</div></div>';
 
     if (j.jobDescription) html += '<div class="log-desc" style="margin-top:8px; font-size:14px">'+esc(j.jobDescription)+'</div>';
     if (admin && j.comments) html += '<div class="hint" style="margin-top:8px">Notes: '+esc(j.comments)+'</div>';
@@ -1764,7 +1787,20 @@
         // venue, description, every visit, materials, hours and price, as
         // plain text ready to paste rather than selecting it off the screen.
         html += '<button type="button" class="btn btn-ghost btn-sm" data-copy-job="'+esc(j.id)+'">Copy for invoice</button>';
-        html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">'+(j.needsPricing?"✓ In Drew’s queue":"Send to Drew for pricing")+'</button>';
+        if (j.needsPricing){
+          html += '<button type="button" class="btn btn-outline btn-sm" data-toggle-drew="'+esc(j.id)+'">✓ In Drew’s queue</button>';
+        } else if (state.sendToDrewOpen){
+          html += '<div class="field" style="flex:1 0 100%; margin:8px 0 0">' +
+            '<label>Note for Drew (optional)</label>' +
+            '<textarea id="send-to-drew-note">'+esc(j.comments||"")+'</textarea>' +
+          '</div>';
+          html += '<div style="display:flex; gap:8px; margin-top:8px;">' +
+            '<button type="button" class="btn btn-primary btn-sm" data-action="confirm-send-drew" data-job-id="'+esc(j.id)+'">Send to Drew</button>' +
+            '<button type="button" class="btn btn-ghost btn-sm" data-action="cancel-send-drew">Cancel</button>' +
+          '</div>';
+        } else {
+          html += '<button type="button" class="btn btn-outline btn-sm" data-action="open-send-drew">Send to Drew for pricing</button>';
+        }
         html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-merge" data-job-id="'+esc(j.id)+'">Merge into another job&hellip;</button>';
         if (j.isMerged){
           html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-unmerge" data-job-id="'+esc(j.id)+'">Unmerge&hellip;</button>';
@@ -2479,6 +2515,11 @@
     html += '<label class="drew-desc-label" for="drew-desc-input">Job description</label>';
     html += '<textarea id="drew-desc-input" class="drew-desc-edit">'+esc(j.jobDescription||"")+'</textarea>';
     html += '<div class="drew-edit-hint">Fix anything that\'s wrong or unclear &mdash; Grace will see your edit.</div>';
+
+    // Grace's own note, added when she sent this through — this field used
+    // to go completely unseen by Drew even though it was always meant for
+    // him (see sendJobToDrew).
+    if (j.comments) html += '<div class="drew-note-box"><div class="drew-note-label">Note from Grace</div><div class="drew-note-text">'+esc(j.comments)+'</div></div>';
 
     html += '<div class="drew-section-label">Who worked, and how long</div>';
     if (!logs.length){
@@ -3771,7 +3812,7 @@
   // ---------- events ----------
   function bindEvents(){
     root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){
-      state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.editingJobId=null; state.viewingJobId=null; state.drewPricingView=false;
+      state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.editingJobId=null; state.viewingJobId=null; state.drewPricingView=false; state.sendToDrewOpen=false;
       state.bulkMergeActive=false; state.bulkMergeSelected=[]; state.bulkMergeReviewing=false;
       state.bulkMergeTargetId=null; state.bulkMergeRenameOverride=null;
       render();
@@ -4068,7 +4109,7 @@
       // further in, not backing out, so the original card shouldn't get
       // overwritten.
       if (!state.viewingJobId) returnToJobId = b.getAttribute("data-view-job");
-      state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; state.editingLogDateId = null; render();
+      state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; state.editingLogDateId = null; state.sendToDrewOpen = false; render();
     }); });
     root.querySelectorAll("[data-view-job-drew]").forEach(function(b){ b.addEventListener("click", function(){
       if (!state.viewingJobId) returnToJobId = b.getAttribute("data-view-job-drew");
@@ -4079,7 +4120,7 @@
     var closeJobDetailBtn = root.querySelector('[data-action="close-job-detail"]');
     if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){
       state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null; state.editingLogDateId=null;
-      state.drewPricingView=false; state.drewSaving=false; state.drewSaved=false; state.drewPriceMsg=null;
+      state.drewPricingView=false; state.drewSaving=false; state.drewSaved=false; state.drewPriceMsg=null; state.sendToDrewOpen=false;
       render();
       // A raw pixel scroll position didn't reliably survive the swap back
       // to a much taller page on every phone browser, even deferred a
@@ -4105,6 +4146,15 @@
     var toggleJobActionsBtn = root.querySelector('[data-action="toggle-job-actions"]');
     if (toggleJobActionsBtn) toggleJobActionsBtn.addEventListener("click", function(){ state.jobActionsOpen = !state.jobActionsOpen; render(); });
     root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
+    var openSendDrewBtn = root.querySelector('[data-action="open-send-drew"]');
+    if (openSendDrewBtn) openSendDrewBtn.addEventListener("click", function(){ state.sendToDrewOpen = true; render(); });
+    var cancelSendDrewBtn = root.querySelector('[data-action="cancel-send-drew"]');
+    if (cancelSendDrewBtn) cancelSendDrewBtn.addEventListener("click", function(){ state.sendToDrewOpen = false; render(); });
+    var confirmSendDrewBtn = root.querySelector('[data-action="confirm-send-drew"]');
+    if (confirmSendDrewBtn) confirmSendDrewBtn.addEventListener("click", function(){
+      var noteInput = document.getElementById("send-to-drew-note");
+      sendJobToDrew(confirmSendDrewBtn.getAttribute("data-job-id"), noteInput ? noteInput.value : "");
+    });
 
     root.querySelectorAll("[data-ts-week]").forEach(function(b){ b.addEventListener("click", function(){ state.tsWeekOffset += parseInt(b.getAttribute("data-ts-week"),10); render(); }); });
     var openAdminLeaveBtn = root.querySelector('[data-action="open-admin-leave"]');
@@ -5047,6 +5097,19 @@
     db.collection("jobs").doc(jobId).update({needsPricing: !j.needsPricing})
       .then(function(){ toast(j.needsPricing ? "Removed from Drew's queue" : "Sent to Drew for pricing"); })
       .catch(function(){ toast("Couldn't update that."); });
+  }
+
+  // Sending TO Drew (not taking it back out again) saves a note alongside
+  // it — reuses the job's existing "Comments (management only)" field,
+  // which was already labelled for exactly this ("Notes for whoever prices
+  // or reviews this job") but never actually shown to Drew. See
+  // renderDrewPricingView for where he now sees it.
+  function sendJobToDrew(jobId, note){
+    if (!db) return;
+    var trimmed = (note || "").trim();
+    db.collection("jobs").doc(jobId).update({needsPricing: true, comments: trimmed || null})
+      .then(function(){ state.sendToDrewOpen = false; toast("Sent to Drew for pricing"); render(); })
+      .catch(function(){ toast("Couldn't update that — try again."); });
   }
 
   function onSubmitJobDetails(e){
