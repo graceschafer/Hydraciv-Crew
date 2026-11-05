@@ -301,6 +301,7 @@
   .drew-visit .when{color:var(--ink-soft); font-weight:400; font-size:17px;}
   .drew-visit .hrs{font-weight:800; font-size:23px; white-space:nowrap;}
   .drew-also{font-size:15px; color:var(--ink-faint); margin-top:2px;}
+  .drew-visit-desc{font-size:16px; color:var(--ink); margin-top:6px; line-height:1.4;}
   .drew-total-row{display:flex; justify-content:space-between; align-items:baseline; margin-top:16px; padding-top:16px; border-top:3px solid var(--ink); font-size:22px; font-weight:800;}
   .drew-mat-row{display:flex; justify-content:space-between; gap:16px; padding:10px 0; font-size:19px;}
   .drew-mat-row .what{color:var(--ink);}
@@ -405,12 +406,16 @@
   // state.crew.length alone.
   var crewLoaded = false;
 
-  // Scroll position to restore when backing out of a job's detail view —
+  // The job card to scroll back to when backing out of a job's detail view —
   // opening a job used to always leave you scrolled to the top of whatever
-  // list you opened it from. Kept outside `state` on purpose: it's a one-shot
-  // "where to land next" value, not something that should round-trip through
-  // drafts, resets, or anything else that touches state.
-  var returnScrollY = null;
+  // list you opened it from. Tracking the actual card (rather than a raw
+  // pixel offset, which turned out not to survive the swap back to a much
+  // taller page reliably) means "go back to where I was" just means "put
+  // that same card back in view", however tall the list is this time.
+  // Kept outside `state` on purpose: it's a one-shot "where to land next"
+  // value, not something that should round-trip through drafts, resets, or
+  // anything else that touches state.
+  var returnToJobId = null;
 
   // sessionStorage (not localStorage) on purpose — it clears itself when the
   // tab/app is actually closed, so nobody stays signed in to someone else's
@@ -2488,6 +2493,12 @@
         } else if (l.alsoOnsite){
           html += '<div class="drew-also">Also onsite: '+esc(l.alsoOnsite)+'</div>';
         }
+        // What THEY actually wrote about that visit — on a job with more
+        // than one person/visit, the single job-level description above is
+        // whatever the first person typed, so Drew was missing everyone
+        // else's own account of what they did.
+        if (l.jobDescription) html += '<div class="drew-visit-desc">'+esc(l.jobDescription)+'</div>';
+        if (!l.completed && l.remainingWork) html += '<div class="drew-also">Still to do: '+esc(l.remainingWork)+'</div>';
         html += '</div><div class="hrs">'+hrsText+' hrs</div></div>';
       });
       var totalDisplay = (Math.round(totalHours*10)/10).toString();
@@ -4052,15 +4063,15 @@
       sel.addEventListener("change", function(){ setJobStatus(sel.getAttribute("data-job-status-select"), sel.value); });
     });
     root.querySelectorAll("[data-view-job]").forEach(function(b){ b.addEventListener("click", function(){
-      // Only remember the scroll position the FIRST time we drill in — if
-      // a job links to another job (the "merged into X" redirect) we're
-      // still drilling further in, not backing out, so the original spot
-      // (back in the Jobs list, Overview, etc.) shouldn't get overwritten.
-      if (!state.viewingJobId) returnScrollY = window.scrollY;
+      // Only remember this the FIRST time we drill in — if a job links to
+      // another job (the "merged into X" redirect) we're still drilling
+      // further in, not backing out, so the original card shouldn't get
+      // overwritten.
+      if (!state.viewingJobId) returnToJobId = b.getAttribute("data-view-job");
       state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; state.editingLogDateId = null; render();
     }); });
     root.querySelectorAll("[data-view-job-drew]").forEach(function(b){ b.addEventListener("click", function(){
-      if (!state.viewingJobId) returnScrollY = window.scrollY;
+      if (!state.viewingJobId) returnToJobId = b.getAttribute("data-view-job-drew");
       state.viewingJobId = b.getAttribute("data-view-job-drew");
       state.drewPricingView = true; state.drewSaved = false; state.drewPriceMsg = null;
       render();
@@ -4070,14 +4081,18 @@
       state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null; state.editingLogDateId=null;
       state.drewPricingView=false; state.drewSaving=false; state.drewSaved=false; state.drewPriceMsg=null;
       render();
-      // Scrolling right after swapping in the new (much taller) content
-      // doesn't reliably "take" on every phone browser — the layout isn't
-      // settled yet at this exact instant. Waiting two animation frames
-      // (the standard fix for this) makes sure it actually sticks instead
-      // of silently landing back at the top.
-      if (returnScrollY != null){
-        var y = returnScrollY; returnScrollY = null;
-        requestAnimationFrame(function(){ requestAnimationFrame(function(){ window.scrollTo(0, y); }); });
+      // A raw pixel scroll position didn't reliably survive the swap back
+      // to a much taller page on every phone browser, even deferred a
+      // couple of frames — so instead, find the actual card for the job we
+      // just backed out of and scroll THAT into view. That sidesteps the
+      // timing issue entirely, since scrollIntoView works off the layout
+      // that's actually there at the moment it's called.
+      if (returnToJobId){
+        var jobId = returnToJobId; returnToJobId = null;
+        requestAnimationFrame(function(){ requestAnimationFrame(function(){
+          var cardEl = root.querySelector('[data-view-job="'+jobId+'"]') || root.querySelector('[data-view-job-drew="'+jobId+'"]');
+          if (cardEl) cardEl.scrollIntoView({block:"center"});
+        }); });
       }
     });
     var drewSaveBtn = document.getElementById("drew-save-btn");
