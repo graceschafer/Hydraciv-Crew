@@ -365,6 +365,8 @@
     body.printing > *:not(#print-area){display:none !important;}
     #print-area{display:block !important;}
     @page{margin:1.5cm;}
+    #print-area .p-sheet{page-break-after:always;}
+    #print-area .p-sheet:last-child{page-break-after:auto;}
   }
   #print-area{font-family:"Segoe UI",-apple-system,Roboto,sans-serif; color:#16222b; max-width:720px; margin:0 auto; padding:20px;}
   #print-area .p-head{border-bottom:2px solid #123f5c; padding-bottom:12px; margin-bottom:16px;}
@@ -3480,11 +3482,18 @@
     var html = '<div class="card">';
     html += '<div><div class="section-title">Timesheets</div><p class="section-sub" style="margin-bottom:0">One block per crew member for the week below — hit Copy, then paste wherever you need it. Leave days (sick, annual, trade school, public holiday) show up here too at 7.6h, and leave without pay at 0h.</p></div>';
     html += '<div class="weeknav" style="margin-top:14px"><button data-ts-week="-1">&larr;</button><div class="label">'+fmtShort(wk.startStr)+' – '+fmtShort(wk.endStr)+'</div><button data-ts-week="1">&rarr;</button></div>';
+    html += '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">';
     // Lives here (not tucked inside a per-person block) on purpose — someone
     // who forgot to log anything and never added their own leave day won't
     // show up in the list below at all, which is exactly the case this is
     // for, so the button can't depend on their card already being there.
-    html += '<button type="button" class="btn btn-outline btn-sm" style="margin-top:12px" data-action="open-admin-leave">+ Add leave for a crew member</button>';
+    html += '<button type="button" class="btn btn-outline btn-sm" data-action="open-admin-leave">+ Add leave for a crew member</button>';
+    // Same reasoning as above re: names not being known yet — only offer
+    // Print all once there's actually at least one person's sheet to print.
+    if (names.length){
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-action="print-all-timesheets">Print all</button>';
+    }
+    html += '</div>';
     html += '</div>';
 
     if (names.length === 0){
@@ -3658,6 +3667,22 @@
     logs.sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
     var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
     openPrintArea(buildTimesheetPrintHTML(name, wk, logs, total));
+  }
+
+  // Same per-person sheet as "Print" on one timesheet, just stacked for
+  // everyone with logs that week — each wrapped in .p-sheet so the print
+  // stylesheet above forces a page break between people (so it comes out
+  // of the printer as one sheet per crew member, not everyone run together).
+  function printAllTimesheets(){
+    var wk = weekBounds(state.tsWeekOffset);
+    var names = weekEmployeeNames(wk);
+    if (!names.length) return;
+    var html = names.map(function(name){
+      var logs = weeklyEntriesFor(name, wk).sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
+      var total = logs.reduce(function(s,l){ return s+numHours(l.hours); }, 0);
+      return '<div class="p-sheet">' + buildTimesheetPrintHTML(name, wk, logs, total) + '</div>';
+    }).join("");
+    openPrintArea(html);
   }
 
   function buildJobPrintHTML(j){
@@ -4170,6 +4195,8 @@
     }); });
     root.querySelectorAll("[data-copy-ts]").forEach(function(b){ b.addEventListener("click", function(){ copyTimesheetFor(b.getAttribute("data-copy-ts")); }); });
     root.querySelectorAll("[data-print-ts]").forEach(function(b){ b.addEventListener("click", function(){ printTimesheetFor(b.getAttribute("data-print-ts")); }); });
+    var printAllTsBtn = root.querySelector('[data-action="print-all-timesheets"]');
+    if (printAllTsBtn) printAllTsBtn.addEventListener("click", printAllTimesheets);
     root.querySelectorAll("[data-print-job]").forEach(function(b){ b.addEventListener("click", function(){ printJob(b.getAttribute("data-print-job")); }); });
     root.querySelectorAll("[data-copy-job]").forEach(function(b){ b.addEventListener("click", function(){ copyJobForInvoice(b.getAttribute("data-copy-job")); }); });
 
