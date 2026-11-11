@@ -329,6 +329,7 @@
   .drew-comments-sub{font-size:14px; color:var(--amber-ink); opacity:.8; margin-bottom:12px;}
   .drew-comments-input{width:100%; font-size:18px; color:var(--ink); background:var(--surface); border:2px solid var(--amber); border-radius:10px; padding:14px; font-family:inherit; resize:vertical; min-height:90px;}
   .drew-comments-input:focus{outline:none; border-color:var(--accent-strong);}
+  .drew-sendback-box{margin-top:16px;}
 
   /* "Select to merge" multi-pick mode on the Jobs tab, and its confirm screen. */
   .job-card-selectable{padding-left:42px; cursor:pointer; border:2px solid var(--line);}
@@ -2566,8 +2567,16 @@
     // view and flagged with a pill on the job card so she doesn't miss it.
     html += '<div class="drew-comments-box">';
     html += '<div class="drew-comments-label">Comments for Grace</div>';
-    html += '<div class="drew-comments-sub">Optional &mdash; anything she should know before this gets invoiced.</div>';
+    html += '<div class="drew-comments-sub">Optional &mdash; anything she should know, whether you\'re pricing this or sending it back unfinished.</div>';
     html += '<textarea id="drew-comments-input" class="drew-comments-input" placeholder="e.g. Took longer than usual, the pipework underneath was badly corroded.">'+esc(j.drewComments||"")+'</textarea>';
+    html += '</div>';
+
+    // Lets Drew bail out of pricing a job that isn't actually finished from
+    // his side — any note above still gets saved, the job just drops out of
+    // his queue (needsPricing:false) and back onto the ordinary Jobs list
+    // instead of picking up a price. See sendJobBackToJobs.
+    html += '<div class="drew-sendback-box">';
+    html += '<button type="button" class="btn btn-outline btn-sm" style="border-color:var(--amber); color:var(--amber-ink); width:100%;" id="drew-sendback-btn" data-job-id="'+esc(j.id)+'">&larr; Not complete yet — send back to Jobs</button>';
     html += '</div>';
 
     html += '<div class="drew-price-box">';
@@ -4168,6 +4177,12 @@
       var commentsInput = document.getElementById("drew-comments-input");
       setDrewPrice(drewSaveBtn.getAttribute("data-job-id"), input ? input.value : "", descInput ? descInput.value : "", commentsInput ? commentsInput.value : "");
     });
+    var drewSendBackBtn = document.getElementById("drew-sendback-btn");
+    if (drewSendBackBtn) drewSendBackBtn.addEventListener("click", function(){
+      var descInput = document.getElementById("drew-desc-input");
+      var commentsInput = document.getElementById("drew-comments-input");
+      sendJobBackToJobs(drewSendBackBtn.getAttribute("data-job-id"), descInput ? descInput.value : "", commentsInput ? commentsInput.value : "");
+    });
     var toggleJobActionsBtn = root.querySelector('[data-action="toggle-job-actions"]');
     if (toggleJobActionsBtn) toggleJobActionsBtn.addEventListener("click", function(){ state.jobActionsOpen = !state.jobActionsOpen; render(); });
     root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
@@ -5114,6 +5129,29 @@
       state.drewSaving = false;
       state.drewPriceMsg = "Couldn't save that — try again.";
       render();
+    });
+  }
+
+  // Drew's "this isn't actually finished" escape hatch from the pricing
+  // screen — drops the job out of his queue (same needsPricing:false that
+  // jobsOutsideDrewQueue checks, so it reappears on the ordinary Jobs list)
+  // without touching invoiceAmount/pricedAt, since it's explicitly NOT being
+  // priced. Still saves whatever he typed in the description/comments boxes
+  // first, same as setDrewPrice does, so his reason for bouncing it back
+  // isn't lost.
+  function sendJobBackToJobs(jobId, descValue, commentsValue){
+    if (!db || !jobId) return;
+    var patch = { needsPricing: false };
+    var descTrimmed = (descValue || "").trim();
+    if (descTrimmed) patch.jobDescription = descTrimmed;
+    patch.drewComments = (commentsValue || "").trim() || null;
+    db.collection("jobs").doc(jobId).update(patch).then(function(){
+      state.viewingJobId = null; state.drewPricingView = false;
+      state.drewSaving = false; state.drewSaved = false; state.drewPriceMsg = null;
+      toast("Sent back to Jobs — not priced");
+      render();
+    }).catch(function(){
+      toast("Couldn't update that — try again.");
     });
   }
 
