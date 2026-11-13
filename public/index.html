@@ -503,6 +503,11 @@
     sendToDrewOpen: false,
     bulkMergeActive: false, bulkMergeSelected: [], bulkMergeReviewing: false,
     bulkMergeTargetId: null, bulkMergeRenameOverride: null, bulkMergeBusy: false,
+    // Set when "Merge jobs" is tapped from a specific day's heading (rather
+    // than the top "Select to merge" button) — scopes the selection list
+    // down to just that day's jobs. "" is a real value (the "No date
+    // logged" group), so this is compared with != null, never truthiness.
+    bulkMergeDateKey: null,
     crewJobSearch: "",
   };
 
@@ -527,9 +532,11 @@
   // Buckets a job list into one group per day — the date used is whichever
   // date already shows on that job's card (its most recently LOGGED visit,
   // see renderJobCard), so the heading someone reads always matches what's
-  // on the card underneath it. Preserves whatever order `list` came in
-  // (already newest-activity-first), and groups with no date at all — a job
-  // that's somehow never had a visit logged — sort to the very end.
+  // on the card underneath it. Days sort newest first; within a day, jobs
+  // sort alphabetically by venue (so the same day's jobs land in a
+  // predictable order instead of "whoever logged most recently first"),
+  // and groups with no date at all — a job that's somehow never had a
+  // visit logged — sort to the very end.
   function groupJobsByDate(list){
     var byDate = {}, order = [];
     list.forEach(function(j){
@@ -544,7 +551,12 @@
       if (!b) return -1;
       return b.localeCompare(a);
     });
-    return order.map(function(key){ return {date:key, jobs:byDate[key]}; });
+    return order.map(function(key){
+      var jobs = byDate[key].slice().sort(function(a, b){
+        return (a.venue||"").toLowerCase().localeCompare((b.venue||"").toLowerCase());
+      });
+      return {date:key, jobs:jobs};
+    });
   }
   function fmtTime(iso){ try{ return new Date(iso).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}); }catch(e){ return ""; } }
   function getMonday(d){ var day=d.getDay(); var diff=(day===0?-6:1-day); return new Date(d.getFullYear(), d.getMonth(), d.getDate()+diff); }
@@ -2286,7 +2298,9 @@
     }
     html += '</div>';
     if (state.bulkMergeActive){
-      html += '<p class="hint" style="margin-top:10px">Tap every job that belongs together. You\'ll pick which one they merge into next.</p>';
+      html += '<p class="hint" style="margin-top:10px">'+(state.bulkMergeDateKey != null
+        ? 'Tap every job on '+(state.bulkMergeDateKey ? esc(fmtDateHeading(state.bulkMergeDateKey)) : "this day")+' that belongs together. You\'ll pick which one they merge into next.'
+        : 'Tap every job that belongs together. You\'ll pick which one they merge into next.')+'</p>';
     }
     html += field("Search", '<input type="text" id="venue-search-input" placeholder="e.g. Deer Park, shelf, VTASK 123" value="'+esc(state.venueQuery)+'" autocomplete="off">');
 
@@ -2331,13 +2345,31 @@
     }
     list = list.slice().sort(byRecentJobActivity);
 
+    // Tapping "Merge jobs" on a specific day's heading scopes the whole
+    // selection flow down to just that day — simpler than scrolling through
+    // every other date while picking which jobs on THIS day belong together.
+    if (state.bulkMergeActive && state.bulkMergeDateKey != null){
+      list = list.filter(function(j){
+        var latestLog = jobLogsFor(j.id)[0];
+        var key = (latestLog && latestLog.date) ? latestLog.date : "";
+        return key === state.bulkMergeDateKey;
+      });
+    }
+
     html += '</div>';
     if (list.length===0){ html += '<div class="card"><p class="empty-note">'+(q?"No jobs match.":"No jobs yet.")+'</p></div>'; }
     else {
       // One section per day, newest day first — see groupJobsByDate.
       groupJobsByDate(list).forEach(function(g){
         html += '<div class="date-group">';
-        html += '<div class="date-heading"><span class="dow">'+(g.date?esc(fmtDateHeading(g.date)):"No date logged")+'</span><span class="count">'+g.jobs.length+' job'+(g.jobs.length===1?"":"s")+'</span></div>';
+        html += '<div class="date-heading"><span class="dow">'+(g.date?esc(fmtDateHeading(g.date)):"No date logged")+'</span><span class="count">'+g.jobs.length+' job'+(g.jobs.length===1?"":"s")+'</span>';
+        // One job alone can't be merged with anything, and once a merge
+        // flow is already running (from here or the top button) a second
+        // "Merge jobs" button would just start a conflicting selection.
+        if (isAdmin() && !state.bulkMergeActive && g.jobs.length > 1){
+          html += '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px" data-action="start-bulk-merge-date" data-date-key="'+esc(g.date)+'">Merge jobs</button>';
+        }
+        html += '</div>';
         html += '<div class="jobs-grid">';
         g.jobs.forEach(function(j){ html += renderJobCard(j, {admin:isAdmin(), bulkSelectMode: state.bulkMergeActive}); });
         html += '</div></div>';
@@ -2439,6 +2471,7 @@
       toast("Merged " + actualSources.length + " job" + (actualSources.length===1?"":"s") + " into " + finalVenue);
       state.bulkMergeActive = false; state.bulkMergeReviewing = false; state.bulkMergeSelected = [];
       state.bulkMergeTargetId = null; state.bulkMergeRenameOverride = null; state.bulkMergeBusy = false;
+      state.bulkMergeDateKey = null;
       state.viewingJobId = targetId;
       render();
     }).catch(function(){
@@ -3955,13 +3988,13 @@
     root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){
       state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.editingJobId=null; state.viewingJobId=null; state.drewPricingView=false; state.sendToDrewOpen=false;
       state.bulkMergeActive=false; state.bulkMergeSelected=[]; state.bulkMergeReviewing=false;
-      state.bulkMergeTargetId=null; state.bulkMergeRenameOverride=null;
+      state.bulkMergeTargetId=null; state.bulkMergeRenameOverride=null; state.bulkMergeDateKey=null;
       render();
     }); });
     root.querySelectorAll("[data-mgmt]").forEach(function(b){ b.addEventListener("click", function(){
       state.mgmtSub=b.getAttribute("data-mgmt");
       state.bulkMergeActive=false; state.bulkMergeSelected=[]; state.bulkMergeReviewing=false;
-      state.bulkMergeTargetId=null; state.bulkMergeRenameOverride=null;
+      state.bulkMergeTargetId=null; state.bulkMergeRenameOverride=null; state.bulkMergeDateKey=null;
       state.subJobTarget="new"; state.subJobLinkQuery=""; state.subJobLinkJobId=null;
       render();
     }); });
@@ -4398,12 +4431,22 @@
     if (startBulkMergeBtn) startBulkMergeBtn.addEventListener("click", function(){
       state.bulkMergeActive = true; state.bulkMergeSelected = [];
       state.bulkMergeTargetId = null; state.bulkMergeRenameOverride = null;
+      state.bulkMergeDateKey = null;
       render();
     });
+    // "Merge jobs" on one day's heading — same flow, just pre-scoped to that
+    // day's jobs (see the bulkMergeDateKey filter in renderJobsAdmin).
+    root.querySelectorAll('[data-action="start-bulk-merge-date"]').forEach(function(b){ b.addEventListener("click", function(){
+      state.bulkMergeActive = true; state.bulkMergeSelected = [];
+      state.bulkMergeTargetId = null; state.bulkMergeRenameOverride = null;
+      state.bulkMergeDateKey = b.getAttribute("data-date-key") || "";
+      render();
+    }); });
     var cancelBulkMergeBtn = root.querySelector('[data-action="cancel-bulk-merge"]');
     if (cancelBulkMergeBtn) cancelBulkMergeBtn.addEventListener("click", function(){
       state.bulkMergeActive = false; state.bulkMergeSelected = [];
       state.bulkMergeTargetId = null; state.bulkMergeRenameOverride = null;
+      state.bulkMergeDateKey = null;
       render();
     });
     root.querySelectorAll("[data-bulk-pick]").forEach(function(b){ b.addEventListener("click", function(){
