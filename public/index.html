@@ -2591,6 +2591,14 @@
     var html = '<button type="button" class="btn btn-ghost drew-back" data-action="close-job-detail" style="margin-bottom:8px; padding-left:0">&larr; Back to the list</button>';
     html += '<div class="drew-card">';
     html += '<div class="drew-venue">'+esc(j.venue||"")+'</div>';
+    // Lets Drew fix the client category himself if it was logged wrong (or
+    // never set) — saved together with the price, same as the description
+    // edit just below (see setDrewPrice / sendJobBackToJobs).
+    html += '<div class="field" id="drew-client-seg-wrap"><label>Client</label><div class="seg" data-seg="client">' +
+      CLIENT_OPTIONS.map(function(c){
+        return '<button type="button" data-val="'+esc(c)+'" class="'+(j.client===c?"on":"")+'">'+esc(c)+'</button>';
+      }).join("") +
+    '</div></div>';
     // Editable so he can fix anything crew got wrong or left unclear before
     // it gets priced — saved together with the price (see setDrewPrice).
     html += '<label class="drew-desc-label" for="drew-desc-input">Job description</label>';
@@ -4376,13 +4384,15 @@
       var input = document.getElementById("drew-price-input");
       var descInput = document.getElementById("drew-desc-input");
       var commentsInput = document.getElementById("drew-comments-input");
-      setDrewPrice(drewSaveBtn.getAttribute("data-job-id"), input ? input.value : "", descInput ? descInput.value : "", commentsInput ? commentsInput.value : "");
+      var clientOn = document.querySelector('#drew-client-seg-wrap [data-seg="client"] .on');
+      setDrewPrice(drewSaveBtn.getAttribute("data-job-id"), input ? input.value : "", descInput ? descInput.value : "", commentsInput ? commentsInput.value : "", clientOn ? clientOn.getAttribute("data-val") : null);
     });
     var drewSendBackBtn = document.getElementById("drew-sendback-btn");
     if (drewSendBackBtn) drewSendBackBtn.addEventListener("click", function(){
       var descInput = document.getElementById("drew-desc-input");
       var commentsInput = document.getElementById("drew-comments-input");
-      sendJobBackToJobs(drewSendBackBtn.getAttribute("data-job-id"), descInput ? descInput.value : "", commentsInput ? commentsInput.value : "");
+      var clientOn = document.querySelector('#drew-client-seg-wrap [data-seg="client"] .on');
+      sendJobBackToJobs(drewSendBackBtn.getAttribute("data-job-id"), descInput ? descInput.value : "", commentsInput ? commentsInput.value : "", clientOn ? clientOn.getAttribute("data-val") : null);
     });
     var toggleJobActionsBtn = root.querySelector('[data-action="toggle-job-actions"]');
     if (toggleJobActionsBtn) toggleJobActionsBtn.addEventListener("click", function(){ state.jobActionsOpen = !state.jobActionsOpen; render(); });
@@ -5333,7 +5343,7 @@
   // stamping onSubmitJobDetails already does for the invoice amount (see
   // below), just without needing the rest of that form (venue/description)
   // along for the ride.
-  function setDrewPrice(jobId, rawValue, descValue, commentsValue){
+  function setDrewPrice(jobId, rawValue, descValue, commentsValue, clientValue){
     if (!db || !jobId) return;
     var trimmed = (rawValue || "").trim();
     var num = parseFloat(trimmed);
@@ -5348,6 +5358,11 @@
     var descTrimmed = (descValue || "").trim();
     if (descTrimmed) patch.jobDescription = descTrimmed;
     patch.drewComments = (commentsValue || "").trim() || null;
+    // Lets Drew correct the client category while he's in here pricing it.
+    // Older jobs can have no client set at all, in which case nothing in
+    // the seg is picked and this is left out of the patch entirely, rather
+    // than writing an empty value over whatever (if anything) was there.
+    if (clientValue) patch.client = clientValue;
     state.drewSaving = true; state.drewPriceMsg = null; state.drewSaved = false; render();
     db.collection("jobs").doc(jobId).update(patch).then(function(){
       state.drewSaving = false; state.drewSaved = true;
@@ -5367,12 +5382,13 @@
   // priced. Still saves whatever he typed in the description/comments boxes
   // first, same as setDrewPrice does, so his reason for bouncing it back
   // isn't lost.
-  function sendJobBackToJobs(jobId, descValue, commentsValue){
+  function sendJobBackToJobs(jobId, descValue, commentsValue, clientValue){
     if (!db || !jobId) return;
     var patch = { needsPricing: false };
     var descTrimmed = (descValue || "").trim();
     if (descTrimmed) patch.jobDescription = descTrimmed;
     patch.drewComments = (commentsValue || "").trim() || null;
+    if (clientValue) patch.client = clientValue;
     db.collection("jobs").doc(jobId).update(patch).then(function(){
       state.viewingJobId = null; state.drewPricingView = false;
       state.drewSaving = false; state.drewSaved = false; state.drewPriceMsg = null;
