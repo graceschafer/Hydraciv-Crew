@@ -467,6 +467,7 @@
     changePinOpen: false, changePinMsg: null,
     byCrewEmployee: null,
     venueQuery: "",
+    drewQuery: "", pricedQuery: "", invoicedQuery: "",
     crewJobsTab: "open",
     viewingJobId: null, jobActionsOpen: false,
     mergeSourceId: null, mergeQuery: "", mergeTargetCandidateId: null,
@@ -556,6 +557,43 @@
         return (a.venue||"").toLowerCase().localeCompare((b.venue||"").toLowerCase());
       });
       return {date:key, jobs:jobs};
+    });
+  }
+  // Buckets a job list into one group per client — ALH, Pubco/Supreme,
+  // MRC/Pegasus, Black Rhino, Other, Unsure — in that fixed order (the same
+  // CLIENT_OPTIONS list a job's own client field is picked from, so the
+  // categories here always line up with what's chosen on the job itself).
+  // A job whose client isn't one of those (blank, or logged before this
+  // field existed) falls into a trailing "No client listed" group instead
+  // of getting lost. Jobs within each client group sort alphabetically by
+  // venue — see groupJobsByDate above for the same idea, by day instead.
+  function groupJobsByClient(list){
+    var byClient = {};
+    CLIENT_OPTIONS.forEach(function(c){ byClient[c] = []; });
+    var noClient = [];
+    list.forEach(function(j){
+      if (j.client && byClient.hasOwnProperty(j.client)) byClient[j.client].push(j);
+      else noClient.push(j);
+    });
+    var groups = CLIENT_OPTIONS.map(function(c){ return {client:c, jobs:byClient[c]}; }).filter(function(g){ return g.jobs.length; });
+    if (noClient.length) groups.push({client:null, jobs:noClient});
+    groups.forEach(function(g){
+      g.jobs.sort(function(a, b){ return (a.venue||"").toLowerCase().localeCompare((b.venue||"").toLowerCase()); });
+    });
+    return groups;
+  }
+  // Shared text search for For Drew / Priced / Invoiced (the Jobs tab has
+  // its own copy with a precomputed logsByJob map, since it searches the
+  // whole job list at once and that matters there) — checks the job's own
+  // fields plus everything logged against it, so searching a material or a
+  // crew member's name still finds the right job even off the venue name.
+  function jobMatchesSearch(j, q){
+    if (!q) return true;
+    var hay = [j.venue, j.jobDescription, j.vtask, j.poNumber, j.client, (j.assignedEmployees||[]).join(" ")].join(" ").toLowerCase();
+    if (hay.indexOf(q) !== -1) return true;
+    return jobLogsFor(j.id).some(function(l){
+      var lhay = [l.materials, l.remainingWork, l.submittedBy, l.alsoOnsite, (l.employees||[]).join(" ")].join(" ").toLowerCase();
+      return lhay.indexOf(q) !== -1;
     });
   }
   function fmtTime(iso){ try{ return new Date(iso).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}); }catch(e){ return ""; } }
@@ -2513,16 +2551,23 @@
   function renderForDrew(){
     var awaiting = nonInvoicedJobs().filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
     awaiting.sort(byRecentJobActivity);
+    var q = (state.drewQuery || "").trim().toLowerCase();
+    if (q) awaiting = awaiting.filter(function(j){ return jobMatchesSearch(j, q); });
 
     var html = '<div class="card">';
     html += '<div class="section-title">For Drew to price</div><p class="section-sub">Jobs sent through for Drew (or anyone in management) to price.</p>';
-    if (awaiting.length===0){ html += '<p class="empty-note">Nothing waiting on a price right now.</p>'; }
+    html += field("Search", '<input type="text" id="drew-search-input" placeholder="e.g. Deer Park, shelf, VTASK 123" value="'+esc(state.drewQuery)+'" autocomplete="off">');
+    if (awaiting.length===0){ html += '<p class="empty-note">'+(q?"No jobs match.":"Nothing waiting on a price right now.")+'</p>'; }
     html += '</div>';
-    if (awaiting.length){
+    // Grouped by client, then alphabetically by venue within each — see
+    // groupJobsByClient.
+    groupJobsByClient(awaiting).forEach(function(g){
+      html += '<div class="date-group">';
+      html += '<div class="date-heading"><span class="dow">'+esc(g.client||"No client listed")+'</span><span class="count">'+g.jobs.length+' job'+(g.jobs.length===1?"":"s")+'</span></div>';
       html += '<div class="jobs-grid">';
-      awaiting.forEach(function(j){ html += renderJobCard(j, {admin:true, drewMode:true}); });
-      html += '</div>';
-    }
+      g.jobs.forEach(function(j){ html += renderJobCard(j, {admin:true, drewMode:true}); });
+      html += '</div></div>';
+    });
     return html;
   }
 
@@ -2628,23 +2673,30 @@
   // ---------- Priced: has a price, not yet marked Invoiced ----------
   function renderPricedJobs(){
     var priced = nonInvoicedJobs().filter(function(j){ return j.invoiceAmount != null && j.invoiceAmount !== ""; });
-    var withAge = priced.map(function(j){ return {job:j, age: daysSince(j.pricedAt || j.lastUpdatedAt || j.createdAt)}; });
-    withAge.sort(function(a,b){ return byRecentJobActivity(a.job, b.job); });
+    var q = (state.pricedQuery || "").trim().toLowerCase();
+    if (q) priced = priced.filter(function(j){ return jobMatchesSearch(j, q); });
+    // age gets looked up per job below, after grouping scrambles the order
+    // byRecentJobActivity used to provide — see groupJobsByClient.
+    var ageById = {};
+    priced.forEach(function(j){ ageById[j.id] = daysSince(j.pricedAt || j.lastUpdatedAt || j.createdAt); });
 
     var html = '<div class="card">';
-    html += '<div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Invoiced tab. Newest first — the "waiting X days" note still flags ones at risk of being forgotten.</p>';
-    if (priced.length===0){ html += '<p class="empty-note">Nothing priced and waiting right now.</p>'; }
+    html += '<div class="section-title">Priced — ready to invoice</div><p class="section-sub">Once you mark one Invoiced (open the job and change its status), it moves off this list into the Invoiced tab. Grouped by client, alphabetically within each &mdash; the "waiting X days" note still flags ones at risk of being forgotten.</p>';
+    html += field("Search", '<input type="text" id="priced-search-input" placeholder="e.g. Deer Park, shelf, VTASK 123" value="'+esc(state.pricedQuery)+'" autocomplete="off">');
+    if (priced.length===0){ html += '<p class="empty-note">'+(q?"No jobs match.":"Nothing priced and waiting right now.")+'</p>'; }
     html += '</div>';
-    if (withAge.length){
+    groupJobsByClient(priced).forEach(function(g){
+      html += '<div class="date-group">';
+      html += '<div class="date-heading"><span class="dow">'+esc(g.client||"No client listed")+'</span><span class="count">'+g.jobs.length+' job'+(g.jobs.length===1?"":"s")+'</span></div>';
       html += '<div class="jobs-grid">';
-      withAge.forEach(function(row){
-        var age = row.age;
-        var note = age==null ? "" : (age===0 ? "Priced today" : "Waiting " + age + " day" + (age===1?"":"s") + (row.job.pricedAt ? "" : " (approx.)"));
+      g.jobs.forEach(function(j){
+        var age = ageById[j.id];
+        var note = age==null ? "" : (age===0 ? "Priced today" : "Waiting " + age + " day" + (age===1?"":"s") + (j.pricedAt ? "" : " (approx.)"));
         var style = (age!=null && age>=5) ? "color:#b3261e; font-weight:700;" : "";
-        html += renderJobCard(row.job, {admin:true, agingNote: note, agingNoteStyle: style});
+        html += renderJobCard(j, {admin:true, agingNote: note, agingNoteStyle: style});
       });
-      html += '</div>';
-    }
+      html += '</div></div>';
+    });
     return html;
   }
 
@@ -2657,10 +2709,13 @@
     invoiced.sort(function(a,b){
       return (b.invoicedAt||b.lastUpdatedAt||b.createdAt||"").localeCompare(a.invoicedAt||a.lastUpdatedAt||a.createdAt||"");
     });
+    var q = (state.invoicedQuery || "").trim().toLowerCase();
+    if (q) invoiced = invoiced.filter(function(j){ return jobMatchesSearch(j, q); });
 
     var html = '<div class="card">';
     html += '<div class="section-title">Invoiced</div><p class="section-sub">Billed and fully closed out — kept out of Jobs, By Crew, For Drew and Overview. This is the only place they live now.</p>';
-    if (invoiced.length===0){ html += '<p class="empty-note">Nothing invoiced yet.</p>'; }
+    html += field("Search", '<input type="text" id="invoiced-search-input" placeholder="e.g. Deer Park, shelf, VTASK 123" value="'+esc(state.invoicedQuery)+'" autocomplete="off">');
+    if (invoiced.length===0){ html += '<p class="empty-note">'+(q?"No jobs match.":"Nothing invoiced yet.")+'</p>'; }
     html += '</div>';
     if (invoiced.length){
       html += '<div class="jobs-grid">';
@@ -4377,6 +4432,23 @@
         if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
       });
     }
+    // Same live-search pattern as venue-search-input above, for the For
+    // Drew / Priced / Invoiced search boxes — re-renders on every
+    // keystroke without losing where the cursor was.
+    function wireLiveSearch(inputId, stateKey){
+      var input = document.getElementById(inputId);
+      if (!input) return;
+      input.addEventListener("input", function(){
+        var pos = input.selectionStart;
+        state[stateKey] = input.value;
+        render();
+        var el = document.getElementById(inputId);
+        if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
+      });
+    }
+    wireLiveSearch("drew-search-input", "drewQuery");
+    wireLiveSearch("priced-search-input", "pricedQuery");
+    wireLiveSearch("invoiced-search-input", "invoicedQuery");
 
     root.querySelectorAll("[data-crew-jobs-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.crewJobsTab=b.getAttribute("data-crew-jobs-tab"); state.crewJobSearch=""; render(); }); });
 
