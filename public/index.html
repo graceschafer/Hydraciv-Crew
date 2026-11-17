@@ -4394,6 +4394,15 @@
       var clientOn = document.querySelector('#drew-client-seg-wrap [data-seg="client"] .on');
       sendJobBackToJobs(drewSendBackBtn.getAttribute("data-job-id"), descInput ? descInput.value : "", commentsInput ? commentsInput.value : "", clientOn ? clientOn.getAttribute("data-val") : null);
     });
+    // Autosaves the instant Drew picks a client category here — on top of
+    // the generic data-seg handler above (which just toggles which button
+    // looks selected), so he doesn't have to also enter a price and hit
+    // Save just to fix the category.
+    root.querySelectorAll('#drew-client-seg-wrap [data-seg="client"] button').forEach(function(b){
+      b.addEventListener("click", function(){
+        saveDrewClient(state.viewingJobId, b.getAttribute("data-val"));
+      });
+    });
     var toggleJobActionsBtn = root.querySelector('[data-action="toggle-job-actions"]');
     if (toggleJobActionsBtn) toggleJobActionsBtn.addEventListener("click", function(){ state.jobActionsOpen = !state.jobActionsOpen; render(); });
     root.querySelectorAll("[data-toggle-drew]").forEach(function(b){ b.addEventListener("click", function(){ toggleNeedsPricing(b.getAttribute("data-toggle-drew")); }); });
@@ -5397,6 +5406,19 @@
     }).catch(function(){
       toast("Couldn't update that — try again.");
     });
+  }
+
+  // Saves the client category the instant Drew taps one on the pricing
+  // screen (see the data-seg="client" buttons inside #drew-client-seg-wrap
+  // in renderDrewPricingView) — doesn't wait for him to also enter a price
+  // and hit Save, since fixing the category isn't really "pricing" and
+  // shouldn't be blocked on it. setDrewPrice/sendJobBackToJobs still save
+  // it too if he changes it again right before either of those.
+  function saveDrewClient(jobId, clientValue){
+    if (!db || !jobId || !clientValue) return;
+    db.collection("jobs").doc(jobId).update({ client: clientValue, lastUpdatedAt: new Date().toISOString() })
+      .then(function(){ toast("Client updated"); })
+      .catch(function(){ toast("Couldn't update that — try again."); });
   }
 
   function toggleNeedsPricing(jobId){
