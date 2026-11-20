@@ -1174,6 +1174,12 @@
     '</div>';
     html += '</div>';
 
+    // A spot for anything that doesn't fit the fields above — seen by both
+    // Grace and Drew (not just management-only like the "Comments" field on
+    // the job itself), so it's the place to flag something either of them
+    // should know about, right from the job sheet.
+    html += field("Comments for Drew/Grace (optional)", '<textarea name="officeComments" placeholder="Anything they should know about this job">'+(prefill?esc(prefill.officeComments||""):"")+'</textarea>');
+
     html += '<button type="submit" class="btn btn-primary btn-block" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Sending…":(isEdit?"Save changes":"Submit job sheet"))+'</button>';
     // Edit mode is for a visit already sitting in Firestore — there's
     // nothing to "draft" there, so this only shows for a fresh/update sheet.
@@ -1655,9 +1661,12 @@
       }
     }
     if (opts.admin){
-      html += (j.invoiceAmount != null && j.invoiceAmount !== "")
-        ? '<span class="pill pill-success mono">$'+Number(j.invoiceAmount).toFixed(2)+'</span>'
-        : '<span class="pill pill-neutral" style="border:1px dashed var(--line); background:transparent;">No price yet</span>';
+      if (j.invoiceAmount != null && j.invoiceAmount !== ""){
+        html += '<span class="pill pill-success mono">$'+Number(j.invoiceAmount).toFixed(2)+' ex GST</span>';
+        html += '<span class="pill pill-accent mono">$'+gstInclusiveAmount(j.invoiceAmount).toFixed(2)+' inc GST</span>';
+      } else {
+        html += '<span class="pill pill-neutral" style="border:1px dashed var(--line); background:transparent;">No price yet</span>';
+      }
     }
     html += '</div></div>';
     if (opts.agingNote){ html += '<div class="hint" style="'+esc(opts.agingNoteStyle||"")+'; margin-top:6px;">'+esc(opts.agingNote)+'</div>'; }
@@ -1707,7 +1716,8 @@
           return '<button type="button" data-val="'+esc(c)+'" class="'+(j.client===c?"on":"")+'">'+esc(c)+'</button>';
         }).join("") +
       '</div></div>';
-      html += field("Invoice amount ($, optional)", '<input type="number" name="invoiceAmount" step="0.01" min="0" placeholder="e.g. 450.00" value="'+(j.invoiceAmount!=null?esc(j.invoiceAmount):"")+'">');
+      html += field("Invoice amount ($, optional)", '<input type="number" id="edit-invoice-amount-input" name="invoiceAmount" step="0.01" min="0" placeholder="e.g. 450.00" value="'+(j.invoiceAmount!=null?esc(j.invoiceAmount):"")+'">' +
+        '<div class="hint mono" id="edit-invoice-gst-hint" style="margin-top:4px; font-weight:700;">'+drewGstHintText(j.invoiceAmount)+'</div>');
       html += field("Comments (optional, management only)", '<textarea name="comments" placeholder="Notes for whoever prices or reviews this job">'+esc(j.comments||"")+'</textarea>');
     }
     html += '<div style="display:flex; gap:8px"><button type="submit" class="btn btn-primary" style="flex:1">Save details</button><button type="button" class="btn btn-outline" data-action="cancel-edit-job">Cancel</button></div>';
@@ -1782,7 +1792,8 @@
     var priceBadge = "", vtaskBadge = "", poBadge = "";
     if (admin){
       priceBadge = (j.invoiceAmount != null && j.invoiceAmount !== "")
-        ? '<button type="button" class="mono" style="background:none; border:none; padding:0; cursor:pointer; font-weight:700; font-size:13px; color:var(--success);" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">$'+Number(j.invoiceAmount).toFixed(2)+'</button>'
+        ? '<button type="button" class="mono" style="background:none; border:none; padding:0; cursor:pointer; font-weight:700; font-size:13px; color:var(--success);" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">$'+Number(j.invoiceAmount).toFixed(2)+' ex GST</button>' +
+          '<span class="mono" style="font-size:12px; font-weight:700; color:var(--accent-strong);">$'+gstInclusiveAmount(j.invoiceAmount).toFixed(2)+' inc GST</span>'
         : '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px; color:var(--ink-faint);" data-action="edit-job-details" data-job-id="'+esc(j.id)+'">+ Add price</button>';
       // VTASK/PO used to only show up as plain text here, and only once
       // already set — nothing on the job detail screen ever invited you to
@@ -1944,6 +1955,11 @@
           if (l.alsoOnsite) html += '<div class="vr-sub">'+(l.alsoOnsite===ALONE_TEXT?"Worked alone":"Also onsite: "+esc(l.alsoOnsite))+'</div>';
           if (!l.completed && l.remainingWork) html += '<div class="vr-sub">Still to do: '+esc(l.remainingWork)+'</div>';
           if (l.crewDone) html += '<div class="vr-sub">Who\'s going back: '+(l.handoffUnsure?"Not sure yet":esc(l.handoffTo||"—"))+'</div>';
+          // Whatever the crew member flagged for Drew/Grace on this visit
+          // (see "Comments for Drew/Grace" in renderJobForm) — highlighted
+          // the same way Drew's own notes back are, so it doesn't blend into
+          // the rest of the visit's details and get missed.
+          if (l.officeComments) html += '<div class="vr-sub" style="background:var(--amber-soft); color:var(--amber-ink); border:1px solid var(--amber); border-radius:6px; padding:6px 8px; margin-top:4px;">&#128172; '+esc(l.officeComments)+'</div>';
           // A visible "Edit this visit" button, right on the visit itself —
           // on a merged job especially, this is what lets each visit be
           // fixed individually (date, hours, time, materials, status —
@@ -2629,6 +2645,9 @@
         // else's own account of what they did.
         if (l.jobDescription) html += '<div class="drew-visit-desc">'+esc(l.jobDescription)+'</div>';
         if (!l.completed && l.remainingWork) html += '<div class="drew-also">Still to do: '+esc(l.remainingWork)+'</div>';
+        // Whatever that crew member flagged for Drew/Grace on this visit —
+        // see "Comments for Drew/Grace" on the job sheet.
+        if (l.officeComments) html += '<div class="drew-also" style="font-weight:700;">&#128172; '+esc(l.officeComments)+'</div>';
         html += '</div><div class="hrs">'+hrsText+' hrs</div></div>';
       });
       var totalDisplay = (Math.round(totalHours*10)/10).toString();
@@ -2670,6 +2689,10 @@
     if (state.drewPriceMsg) html += '<div class="msg msg-error" style="margin-bottom:12px">'+esc(state.drewPriceMsg)+'</div>';
     html += '<div class="drew-price-input-wrap"><span class="drew-dollar">$</span>' +
       '<input type="text" inputmode="decimal" class="drew-price-input" id="drew-price-input" value="'+(j.invoiceAmount!=null?esc(Number(j.invoiceAmount).toFixed(2)):"")+'" placeholder="0.00"></div>';
+    // Updates live as he types (see wireDrewGstHint) so the GST-inclusive
+    // total is obvious before he even hits Save — that figure is never
+    // stored, just worked out from whatever's in the price box right now.
+    html += '<div class="mono" id="drew-gst-hint" style="margin-top:10px; font-size:16px; font-weight:700; color:var(--accent-strong);">'+drewGstHintText(j.invoiceAmount)+'</div>';
     html += '<button type="button" class="drew-save-btn" id="drew-save-btn" data-job-id="'+esc(j.id)+'" '+(state.drewSaving?"disabled":"")+'>'+(state.drewSaving?"SAVING…":"SAVE PRICE & NOTES")+'</button>';
     if (state.drewSaved) html += '<div class="drew-saved-msg" style="display:block">&#10003; Saved — Grace will see it straight away.</div>';
     html += '</div>';
@@ -3773,6 +3796,24 @@
   // worked out at 10% from the entered amount (treated as excl. GST) —
   // that's the exact "$ .00" spot she's had come out blank by hand.
   var GST_RATE = 0.10;
+  // Derived display only, used anywhere a price shows (job cards, the job
+  // detail view, Drew's pricing screen, the printable job sheet) — the
+  // stored invoiceAmount is always exactly what was priced (ex GST); this
+  // just works out the GST-inclusive total so nobody has to do the maths
+  // themselves. buildJobInvoiceText above/below uses the same GST_RATE for
+  // the real invoice text.
+  function gstInclusiveAmount(amount){
+    if (amount == null || amount === "" || isNaN(Number(amount))) return null;
+    return Math.round(Number(amount) * (1 + GST_RATE) * 100) / 100;
+  }
+  // The live hint under Drew's price box (see #drew-gst-hint in
+  // renderDrewPricingView and the input listener that keeps it current as
+  // he types, in bindEvents) — blank until there's a real number to work
+  // GST out from.
+  function drewGstHintText(amount){
+    var inc = gstInclusiveAmount(amount);
+    return inc == null ? "" : "With GST (10%): $" + inc.toFixed(2);
+  }
   function buildJobInvoiceText(j){
     var logs = jobLogsFor(j.id).slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||""); });
     var lines = [];
@@ -3905,7 +3946,7 @@
     if (j.client) metaBits.push(esc(j.client));
     metaBits.push("Status: " + esc(statusLabel(j.status)));
     if (j.assignedEmployees && j.assignedEmployees.length) metaBits.push("Assigned: " + j.assignedEmployees.map(esc).join(", "));
-    if (isAdmin() && j.invoiceAmount != null && j.invoiceAmount !== "") metaBits.push("Invoice: $" + Number(j.invoiceAmount).toFixed(2));
+    if (isAdmin() && j.invoiceAmount != null && j.invoiceAmount !== "") metaBits.push("Invoice: $" + Number(j.invoiceAmount).toFixed(2) + " ex GST ($" + gstInclusiveAmount(j.invoiceAmount).toFixed(2) + " inc GST)");
     var rows = logs.map(function(l){
       var hrs = (l.hours!=null && l.hours!=="") ? esc(l.hours) : "?";
       if (l.timeRange) hrs += ' <span class="p-flag">('+esc(l.timeRange)+')</span>';
@@ -4387,6 +4428,25 @@
       var clientOn = document.querySelector('#drew-client-seg-wrap [data-seg="client"] .on');
       setDrewPrice(drewSaveBtn.getAttribute("data-job-id"), input ? input.value : "", descInput ? descInput.value : "", commentsInput ? commentsInput.value : "", clientOn ? clientOn.getAttribute("data-val") : null);
     });
+    // Keeps the "With GST" hint under Drew's price box current as he types
+    // — plain DOM update, not a full render(), so typing doesn't lose his
+    // place in the input (same reason the search boxes do it this way).
+    var drewPriceInput = document.getElementById("drew-price-input");
+    var drewGstHint = document.getElementById("drew-gst-hint");
+    if (drewPriceInput && drewGstHint){
+      drewPriceInput.addEventListener("input", function(){
+        drewGstHint.textContent = drewGstHintText(drewPriceInput.value);
+      });
+    }
+    // Same live GST hint on the "Invoice amount" field in management's own
+    // Edit job details form (see renderJobEditForm).
+    var editInvoiceAmountInput = document.getElementById("edit-invoice-amount-input");
+    var editInvoiceGstHint = document.getElementById("edit-invoice-gst-hint");
+    if (editInvoiceAmountInput && editInvoiceGstHint){
+      editInvoiceAmountInput.addEventListener("input", function(){
+        editInvoiceGstHint.textContent = drewGstHintText(editInvoiceAmountInput.value);
+      });
+    }
     var drewSendBackBtn = document.getElementById("drew-sendback-btn");
     if (drewSendBackBtn) drewSendBackBtn.addEventListener("click", function(){
       var descInput = document.getElementById("drew-desc-input");
@@ -5024,6 +5084,7 @@
       remainingWork: (jobStatusVal === "no" && f.remainingWork) ? f.remainingWork.value.trim() : "",
       handoffTo: f.handoffTo ? f.handoffTo.value.trim() : "",
       handoffUnsure: f.handoffUnsure ? f.handoffUnsure.value === "1" : false,
+      officeComments: f.officeComments ? f.officeComments.value.trim() : "",
     };
     if (f.venue) fields.venue = f.venue.value.trim();
     var clientSegOn = root.querySelector('#job-form [data-seg="client"] .on');
@@ -5043,6 +5104,7 @@
     var materials = fl.materials, materialsCost = fl.materialsCost;
     var estimatedReturn = fl.estimatedReturn, returnUnsure = fl.returnUnsure, remainingWork = fl.remainingWork;
     var handoffTo = fl.handoffTo, handoffUnsure = fl.handoffUnsure;
+    var officeComments = fl.officeComments;
     var employees = [state.session.name];
 
     if (!jobDescription || !date || !hours){
@@ -5065,6 +5127,7 @@
         remainingWork: completed ? "" : remainingWork,
         crewDone: crewDone, handoffTo: crewDone && !handoffUnsure ? handoffTo : "", handoffUnsure: crewDone ? handoffUnsure : false,
         employees: employees, submittedBy: state.session.name, submittedAt: new Date().toISOString(),
+        officeComments: officeComments || null,
       };
       if (fl.hasMaterialsCostField) logBody.materialsCost = materialsCost;
       return db.collection("job-logs").add(logBody).then(function(){
@@ -5096,6 +5159,7 @@
         estimatedReturn: completed ? "" : estimatedReturn, returnUnsure: completed ? false : returnUnsure,
         remainingWork: completed ? "" : remainingWork,
         crewDone: crewDone, handoffTo: crewDone && !handoffUnsure ? handoffTo : "", handoffUnsure: crewDone ? handoffUnsure : false,
+        officeComments: officeComments || null,
         editedBy: state.session.name, editedAt: new Date().toISOString(),
       };
       if (fl.hasMaterialsCostField) patch.materialsCost = materialsCost;
