@@ -650,6 +650,45 @@
   };
   function leaveLabel(type){ return (LEAVE_TYPES[type] && LEAVE_TYPES[type].label) || "Leave"; }
   function leaveHours(type){ return (LEAVE_TYPES[type] ? LEAVE_TYPES[type].hours : 0); }
+  // Spells out exactly what "Log leave" is about to save — used both at
+  // render time and by the live input listeners in bindEvents (see
+  // "leave-hours-hint" in renderLeaveForm), so whoever's logging it never
+  // has to guess what a toggle or a typed number actually adds up to.
+  // hrs is null only when "Part of the day" is picked but nothing's typed
+  // yet.
+  function leaveHoursHintText(type, hrs, dateFrom, dateTo){
+    if (hrs == null) return "Enter how many hours before saving.";
+    var label = leaveLabel(type).toLowerCase();
+    var isRange = dateTo && dateTo !== dateFrom;
+    var whenText = isRange ? ("each day from " + fmtDay(dateFrom) + " to " + fmtDay(dateTo)) : ("for " + (dateFrom ? fmtDay(dateFrom) : "that day"));
+    if (hrs === 0) return "This logs " + label + " " + whenText + " — unpaid, no hours added to the timesheet.";
+    return "This logs " + hrs.toFixed(1) + "h of " + label + " " + whenText + ".";
+  }
+  // Reads the leave form's current state straight off the DOM and refreshes
+  // #leave-hours-hint — called on every trigger that could change what's
+  // about to be saved (the Type seg, the How-much-of-the-day seg, typing a
+  // custom hours value, or changing either date), see bindEvents.
+  function updateLeaveHoursHint(){
+    var hint = document.getElementById("leave-hours-hint");
+    if (!hint) return;
+    var typeOn = root.querySelector('#leave-form [data-seg="leaveType"] .on');
+    var type = typeOn ? typeOn.getAttribute("data-val") : "sick";
+    var modeOn = root.querySelector('#leave-form [data-seg="leaveHoursMode"] .on');
+    var mode = modeOn ? modeOn.getAttribute("data-val") : "full";
+    var hoursField = document.getElementById("leave-hours-field");
+    if (hoursField) hoursField.style.display = (mode === "part") ? "block" : "none";
+    var hrs;
+    if (mode === "part"){
+      var customInput = document.getElementById("leave-hours-custom");
+      var raw = customInput ? parseFloat((customInput.value||"").trim().replace(",", ".")) : NaN;
+      hrs = (!isNaN(raw) && raw > 0) ? raw : null;
+    } else {
+      hrs = leaveHours(type);
+    }
+    var fromInput = document.getElementById("leave-date-from");
+    var toInput = document.getElementById("leave-date-to");
+    hint.textContent = leaveHoursHintText(type, hrs, fromInput ? fromInput.value : "", toInput ? toInput.value : "");
+  }
 
   // Leave entries for one person in one week, reshaped to look like a job-log
   // row (date/hours/venue/completed) so timesheet rendering, print and
@@ -657,7 +696,12 @@
   function leaveEntriesFor(name, wk){
     return state.leaveLogs
       .filter(function(l){ return l.employee === name && !l.trashed && inRange(l.date, wk.startStr, wk.endStr); })
-      .map(function(l){ return { id: l.id, date: l.date, hours: leaveHours(l.type), completed: true, venue: leaveLabel(l.type), isLeave: true, leaveType: l.type }; });
+      // l.hours is the real number this entry was logged with — a full day
+      // by default, but a custom part-day value whenever that was chosen
+      // (see "How much of the day?" in renderLeaveForm). Only falls back to
+      // the type's fixed default for older entries saved before hours was
+      // stored per-entry.
+      .map(function(l){ return { id: l.id, date: l.date, hours: (l.hours!=null ? l.hours : leaveHours(l.type)), completed: true, venue: leaveLabel(l.type), isLeave: true, leaveType: l.type }; });
   }
   function weeklyEntriesFor(name, wk){
     var jobEntries = state.jobLogs.filter(function(l){ return !l.trashed && inRange(l.date, wk.startStr, wk.endStr) && l.employees && l.employees.indexOf(name) !== -1; });
@@ -1310,7 +1354,7 @@
     var html = '<div class="card"><div class="section-title" style="font-size:17px">Your recent leave</div>';
     mine.forEach(function(l){
       html += '<div class="log-card"><div class="log-top"><div><div class="log-venue">'+esc(leaveLabel(l.type))+'</div>' +
-        '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+leaveHours(l.type).toFixed(1)+'h</span></div></div></div>';
+        '<div class="log-meta">'+fmtDay(l.date)+' &middot; <span class="mono">'+(l.hours!=null ? l.hours : leaveHours(l.type)).toFixed(1)+'h</span></div></div></div>';
       if (state.trashConfirmLeaveId === l.id){
         html += '<div class="msg msg-error" style="margin-top:8px">Delete this leave day? It\'ll disappear from your timesheet — if that\'s a mistake, ask a manager to restore it.</div>';
         html += '<div class="log-foot" style="gap:8px">' +
@@ -1378,15 +1422,42 @@
       '<button type="button" data-val="public" class="'+(type==="public"?"on":"")+'">Public holiday</button>' +
       '<button type="button" data-val="unpaid" class="'+(type==="unpaid"?"on":"")+'">Leave without pay</button>' +
     '</div></div>';
+    var dateFromVal = isEdit ? (leave.date||todayStr()) : todayStr();
+    var dateToVal = "";
     if (isEdit){
-      html += field("Date", '<input type="date" name="date" value="'+esc(leave.date||todayStr())+'" required>');
+      html += field("Date", '<input type="date" id="leave-date-from" name="date" value="'+esc(dateFromVal)+'" required>');
     } else {
       html += '<div class="row2">';
-      html += field("From", '<input type="date" name="date" value="'+esc(todayStr())+'" required>');
-      html += field("To (optional)", '<input type="date" name="dateTo">');
+      html += field("From", '<input type="date" id="leave-date-from" name="date" value="'+esc(dateFromVal)+'" required>');
+      html += field("To (optional)", '<input type="date" id="leave-date-to" name="dateTo">');
       html += '</div>';
       html += '<p class="hint" style="margin:-6px 0 12px">Away just one day? Leave "To" blank. Pick a range and Saturdays/Sundays in it are skipped automatically.</p>';
     }
+
+    // Defaults to a full day, same as every leave entry logged before this
+    // existed — picking "Part of the day" is what opens up a custom hours
+    // box, for something like a couple of hours off for a doctor's visit
+    // instead of the whole day. Editing an existing entry whose hours don't
+    // match its type's usual full-day figure starts already switched to
+    // "Part of the day" with that value showing, rather than silently
+    // reverting it to a full day the moment the form re-renders.
+    var fullDayHours = leaveHours(type);
+    var hoursMode = "full", customHoursVal = "";
+    if (isEdit && leave.hours != null && leave.hours !== fullDayHours){
+      hoursMode = "part";
+      customHoursVal = leave.hours;
+    }
+    html += '<div class="field"><label>How much of the day?</label><div class="seg" data-seg="leaveHoursMode">' +
+      '<button type="button" data-val="full" class="'+(hoursMode==="full"?"on":"")+'">Full day</button>' +
+      '<button type="button" data-val="part" class="'+(hoursMode==="part"?"on":"")+'">Part of the day</button>' +
+    '</div></div>';
+    html += '<div id="leave-hours-field" style="display:'+(hoursMode==="part"?"block":"none")+'">';
+    html += field("Hours", '<input type="text" inputmode="decimal" id="leave-hours-custom" name="leaveHoursCustom" value="'+esc(customHoursVal)+'" placeholder="e.g. 2">');
+    html += '<p class="hint" style="margin:-6px 0 12px">e.g. went to the doctor for a couple of hours &mdash; put the actual hours you were away, not the whole day.</p>';
+    html += '</div>';
+    var hintHours = (hoursMode==="part") ? (customHoursVal!==""?Number(customHoursVal):null) : fullDayHours;
+    html += '<div class="msg msg-info" id="leave-hours-hint" style="font-weight:700;">'+esc(leaveHoursHintText(type, hintHours, dateFromVal, dateToVal))+'</div>';
+
     html += '<button type="submit" class="btn btn-primary btn-block" id="leave-submit-btn" '+(state.formBusy?"disabled":"")+'>'+(state.formBusy?"Saving…":(isEdit?"Save changes":"Log leave"))+'</button>';
     html += '</form></div>';
     return html;
@@ -1410,6 +1481,22 @@
     var type = typeOn ? typeOn.getAttribute("data-val") : "sick";
     if (!date) return;
 
+    // "Full day" keeps the exact behaviour this always had — the type's
+    // fixed hours. "Part of the day" needs a real positive number typed in
+    // before this can save at all (see "How much of the day?" above).
+    var hoursModeOn = root.querySelector('#leave-form [data-seg="leaveHoursMode"] .on');
+    var hoursMode = hoursModeOn ? hoursModeOn.getAttribute("data-val") : "full";
+    var hoursToSave = leaveHours(type);
+    if (hoursMode === "part"){
+      var customRaw = f.leaveHoursCustom ? f.leaveHoursCustom.value.trim().replace(",", ".") : "";
+      var customNum = parseFloat(customRaw);
+      if (!customRaw || isNaN(customNum) || customNum <= 0){
+        state.formMsg = {type:"error", text:"Enter how many hours for “Part of the day”."};
+        render(); return;
+      }
+      hoursToSave = Math.round(customNum * 100) / 100;
+    }
+
     var dates = [date];
     if (mode !== "edit" && dateTo && dateTo !== date){
       if (dateTo < date){
@@ -1427,11 +1514,11 @@
     var p;
     if (mode === "edit"){
       var id = f.getAttribute("data-leave-id");
-      p = db.collection("leave-logs").doc(id).update({type: type, date: date});
+      p = db.collection("leave-logs").doc(id).update({type: type, date: date, hours: hoursToSave});
     } else {
       p = Promise.all(dates.map(function(d){
         var patch = {
-          employee: employee, type: type, date: d, hours: leaveHours(type),
+          employee: employee, type: type, date: d, hours: hoursToSave,
           createdAt: new Date().toISOString(),
         };
         // Leave a trace when a manager logs it on someone else's behalf —
@@ -4209,6 +4296,13 @@
     root.querySelectorAll("[data-edit-leave]").forEach(function(b){ b.addEventListener("click", function(){ state.editLeaveId=b.getAttribute("data-edit-leave"); state.logView="editLeave"; state.formMsg=null; render(); }); });
     var leaveForm = document.getElementById("leave-form");
     if (leaveForm) leaveForm.addEventListener("submit", onSubmitLeaveForm);
+    // Keeps "This logs X.Xh of..." current as someone types a custom hours
+    // value or changes the date(s) — see the leaveType/leaveHoursMode cases
+    // in the generic data-seg handler above for the other two triggers.
+    ["leave-hours-custom", "leave-date-from", "leave-date-to"].forEach(function(id){
+      var el = document.getElementById(id);
+      if (el) el.addEventListener("input", updateLeaveHoursHint);
+    });
 
     // venue autocomplete — as they type, show venues used before that match,
     // so they can tap one instead of retyping it for a return visit.
@@ -4273,6 +4367,7 @@
             var nameInput = document.getElementById("also-onsite-input");
             if (nameInput && val==="alone") nameInput.value = "";
           }
+          if (name === "leaveType" || name === "leaveHoursMode") updateLeaveHoursHint();
         });
       });
     });
