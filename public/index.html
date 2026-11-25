@@ -472,9 +472,11 @@
     viewingJobId: null, jobActionsOpen: false,
     mergeSourceId: null, mergeQuery: "", mergeTargetCandidateId: null,
     unmergeTargetId: null, unmergeSelected: [],
+    movingLogId: null, moveLogQuery: "", moveLogTargetCandidateId: null,
     trashConfirmJobId: null, trashConfirmLeaveId: null, trashConfirmLogId: null,
     openLogActionsId: null,
     editingLogMaterialsCostId: null, editingLogDateId: null,
+    editingPricingNoteId: null,
     syncError: false,
     isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false,
     editingCrewId: null, crewFormError: "",
@@ -860,6 +862,8 @@
       html += renderBulkMergeReview();
     } else if (state.unmergeTargetId){
       html += renderUnmergePicker();
+    } else if (state.movingLogId){
+      html += renderMoveLogPicker();
     } else if (state.viewingScheduleId){
       html += renderScheduleDetail();
     } else if (state.viewingJobId && state.drewPricingView){
@@ -1757,6 +1761,23 @@
     }
     html += '</div></div>';
     if (opts.agingNote){ html += '<div class="hint" style="'+esc(opts.agingNoteStyle||"")+'; margin-top:6px;">'+esc(opts.agingNote)+'</div>'; }
+    // Quick inline note, right next to the "waiting X days" flag — same
+    // tap-to-edit pattern as a visit's materials cost (see quickSetMaterialsCost),
+    // so jotting down why a priced job hasn't been invoiced yet (e.g.
+    // "waiting on PO") never means leaving this list to open the full job.
+    if (opts.pricingNoteEditable){
+      if (state.editingPricingNoteId === j.id){
+        html += '<form data-pricing-note-form="'+esc(j.id)+'" style="display:flex; align-items:center; gap:6px; margin-top:6px;">' +
+          '<input type="text" name="pricingNoteQuick" value="'+esc(j.pricingNote||"")+'" placeholder="e.g. Waiting on a PO" autofocus style="flex:1; padding:4px 6px;">' +
+          '<button type="submit" class="btn btn-primary btn-sm" style="padding:3px 10px;">Save</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" style="padding:3px 6px;" data-cancel-pricing-note="'+esc(j.id)+'">Cancel</button>' +
+        '</form>';
+      } else if (j.pricingNote){
+        html += '<button type="button" class="hint" style="display:block; background:none; border:none; padding:0; cursor:pointer; text-align:left; margin-top:6px; color:var(--ink-soft);" data-add-pricing-note="'+esc(j.id)+'">&#128172; '+esc(j.pricingNote)+' &middot; <span style="text-decoration:underline;">edit</span></button>';
+      } else {
+        html += '<button type="button" class="hint" style="display:block; background:none; border:none; padding:0; cursor:pointer; text-align:left; margin-top:6px; color:var(--ink-faint); text-decoration:underline;" data-add-pricing-note="'+esc(j.id)+'">+ Add a note (e.g. why it\'s waiting)</button>';
+      }
+    }
     if (!opts.bulkSelectMode) html += '<div class="job-card-cta">Tap for full details <span aria-hidden="true">&rarr;</span></div>';
     html += '</div>';
     return html;
@@ -1907,6 +1928,7 @@
     if (j.jobDescription) html += '<div class="log-desc" style="margin-top:8px; font-size:14px">'+esc(j.jobDescription)+'</div>';
     if (admin && j.comments) html += '<div class="hint" style="margin-top:8px">Notes: '+esc(j.comments)+'</div>';
     if (admin && j.drewComments) html += '<div class="msg" style="margin-top:8px; background:var(--amber-soft); color:var(--amber-ink); border:1px solid var(--amber); border-radius:8px; padding:10px 12px;"><strong>From Drew:</strong> '+esc(j.drewComments)+'</div>';
+    if (admin && j.pricingNote) html += '<div class="hint" style="margin-top:8px">&#128172; Pricing note: '+esc(j.pricingNote)+'</div>';
 
     // Only the actions used on most jobs, most of the time, sit in view by
     // default. Print/Copy for invoice/Send to Drew/Merge are all real
@@ -2064,6 +2086,11 @@
               '</div>';
             } else {
               html += '<div class="vr-actions">' +
+                // Moves just THIS one visit to a different job — for when
+                // crew logged an update against the wrong job at a venue
+                // that has more than one (see renderMoveLogPicker). Shown
+                // only to admins, same as the other visit-level edits above.
+                (admin ? '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0;" data-move-log="'+esc(l.id)+'">Move to a different job</button>' : '') +
                 '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 0; color:#b3261e" data-ask-trash-log="'+esc(l.id)+'">Delete</button>' +
               '</div>';
             }
@@ -2315,6 +2342,131 @@
       var latest = docs[0];
       return db.collection("jobs").doc(jobId).update({open: !latest.completed, lastUpdatedAt: new Date().toISOString()});
     });
+  }
+
+  // ---------- Move a single logged visit onto a different job ----------
+  // For when crew log an update against the wrong job because a venue has
+  // more than one job running at once — unlike a full merge, every OTHER
+  // visit on both jobs stays exactly where it was.
+  function renderMoveLogPicker(){
+    var log = state.jobLogs.filter(function(l){ return l.id === state.movingLogId; })[0];
+    var backBtn = '<button type="button" class="btn btn-ghost" data-action="cancel-move-log" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    if (!log){ state.movingLogId = null; return renderJobDetailView(); }
+    var currentJob = state.jobs.filter(function(x){ return x.id === log.jobId; })[0];
+
+    var html = '<div class="card">';
+    html += backBtn;
+    html += '<div class="section-title">Move this visit to a different job</div>';
+    html += '<p class="section-sub">Exactly what you\'re moving &mdash; check it\'s the right one before picking where it goes.</p>';
+
+    // Read-only recap of just this one visit, the same details it shows on
+    // the job itself, so there's no guessing which entry this is.
+    html += '<div class="visit-row"><div class="vr-line1"><div class="vr-body">';
+    html += '<span class="mono">'+(log.hours!=null && log.hours!==""?esc(log.hours):"?")+'h</span>'+(log.timeRange?' <span class="hint">('+esc(log.timeRange)+')</span>':'')+' &middot; '+esc(log.submittedBy||"")+' &middot; '+(log.completed?"Completed":(log.crewDone?"My part done":"Follow-up"));
+    if (log.date) html += '<div class="vr-sub">'+esc(fmtDay(log.date))+'</div>';
+    if (log.jobDescription) html += '<div class="vr-sub">'+esc(log.jobDescription)+'</div>';
+    if (log.materials) html += '<div class="vr-sub">Materials: '+esc(log.materials)+'</div>';
+    if (log.materialsCost != null) html += '<div class="vr-sub">Materials cost: $'+Number(log.materialsCost).toFixed(2)+'</div>';
+    if (log.alsoOnsite) html += '<div class="vr-sub">'+(log.alsoOnsite===ALONE_TEXT?"Worked alone":"Also onsite: "+esc(log.alsoOnsite))+'</div>';
+    if (!log.completed && log.remainingWork) html += '<div class="vr-sub">Still to do: '+esc(log.remainingWork)+'</div>';
+    if (log.officeComments) html += '<div class="vr-sub" style="background:var(--amber-soft); color:var(--amber-ink); border:1px solid var(--amber); border-radius:6px; padding:6px 8px; margin-top:4px;">&#128172; '+esc(log.officeComments)+'</div>';
+    html += '</div></div></div>';
+
+    html += '<p class="hint" style="margin-top:10px">Currently on: <strong>'+esc(currentJob ? currentJob.venue : "(unknown job)")+'</strong></p>';
+    html += '</div>';
+
+    if (state.moveLogTargetCandidateId){
+      var target = state.jobs.filter(function(x){ return x.id === state.moveLogTargetCandidateId; })[0];
+      if (target){
+        html += '<div class="card">';
+        html += '<div class="msg msg-info">Move this visit onto &ldquo;'+esc(target.venue)+'&rdquo;? It\'ll show up there instead of &ldquo;'+esc(currentJob?currentJob.venue:"")+'&rdquo; &mdash; its hours follow it, for timesheets and invoicing.</div>';
+        html += '<div style="display:flex; gap:10px; margin-top:12px;">';
+        html += '<button type="button" class="btn btn-primary" data-action="confirm-move-log">Yes, move it</button>';
+        html += '<button type="button" class="btn btn-ghost" data-action="cancel-move-log-target">Choose a different job</button>';
+        html += '</div>';
+        html += '</div>';
+        return html;
+      }
+    }
+
+    html += '<div class="card">';
+    html += field("Search by venue", '<input type="text" id="move-log-search-input" placeholder="e.g. Deer Park" value="'+esc(state.moveLogQuery)+'" autocomplete="off">');
+    html += '</div>';
+
+    function candidateCard(j){
+      // Same at-a-glance info the merge picker shows — useful here for the
+      // exact same reason: telling two jobs at the same venue apart.
+      var latestLog = jobLogsFor(j.id)[0];
+      var c = '<div class="job-card">';
+      c += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
+      if (latestLog && latestLog.date){
+        c += '<div class="hint mono" style="margin-top:1px;">'+esc(fmtDay(latestLog.date))+'</div>';
+      }
+      if (j.jobDescription) c += '<div class="hint" style="margin-top:2px">'+esc(j.jobDescription)+'</div>';
+      if (j.assignedEmployees && j.assignedEmployees.length){
+        c += '<div class="chips" style="margin-top:6px">'+j.assignedEmployees.map(function(n){return '<span class="pill pill-neutral">'+esc(n)+'</span>';}).join("")+'</div>';
+      }
+      c += '</div><span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span></div>';
+      c += '<button type="button" class="btn btn-outline btn-sm" style="margin-top:10px" data-pick-move-log-target="'+esc(j.id)+'">Move this visit here</button>';
+      c += '</div>';
+      return c;
+    }
+
+    var q = (state.moveLogQuery||"").trim().toLowerCase();
+
+    // Before anyone's typed anything, lead with jobs whose venue looks like
+    // the same place as the one this visit is currently on — the exact
+    // "same venue, different jobs" mix-up this screen exists to fix.
+    if (!q && currentJob){
+      var suggested = suggestedMergeCandidates(currentJob);
+      if (suggested.length){
+        html += '<div class="card">';
+        html += '<div class="section-title" style="font-size:15px">Suggested matches</div>';
+        html += '<p class="hint" style="margin-top:-2px">Other jobs whose name looks like &ldquo;'+esc(currentJob.venue)+'&rdquo; &mdash; worth checking before you search for something else.</p>';
+        html += '</div>';
+        suggested.forEach(function(j){ html += candidateCard(j); });
+      }
+    }
+
+    var candidates = visibleJobs().filter(function(j){ return j.id !== log.jobId; });
+    if (q) candidates = candidates.filter(function(j){ return (j.venue||"").toLowerCase().indexOf(q) !== -1; });
+    candidates.sort(function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); });
+    candidates = candidates.slice(0,25);
+
+    html += '<div class="card">';
+    html += '<div class="section-title" style="font-size:15px">'+(q?"Search results":"All jobs")+'</div>';
+    if (candidates.length === 0){
+      html += '<p class="empty-note">'+(q?"No jobs match.":"No other jobs yet.")+'</p>';
+    } else {
+      html += '</div>';
+      candidates.forEach(function(j){ html += candidateCard(j); });
+      return html;
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function moveLogToJob(logId, targetJobId){
+    if (!db || !logId || !targetJobId) return;
+    var log = state.jobLogs.filter(function(l){ return l.id === logId; })[0];
+    var target = state.jobs.filter(function(x){ return x.id === targetJobId; })[0];
+    if (!log || !target) return;
+    var sourceJobId = log.jobId;
+    db.collection("job-logs").doc(logId).update({
+      jobId: targetJobId,
+      venue: target.venue,
+      // This single visit was never part of a whole-job merge, so it
+      // shouldn't carry a stale mergedFromJobId into its new job — that
+      // field is reserved for tracking an actual job-level merge/unmerge.
+      mergedFromJobId: firebase.firestore.FieldValue.delete()
+    }).then(function(){
+      toast("Moved to " + target.venue);
+      state.movingLogId = null; state.moveLogQuery = ""; state.moveLogTargetCandidateId = null;
+      Promise.all([recomputeJobOpen(sourceJobId), recomputeJobOpen(targetJobId)]).then(function(){
+        state.viewingJobId = targetJobId;
+        render();
+      });
+    }).catch(function(){ toast("Couldn't move that — try again."); });
   }
 
   // Firestore's rules don't allow real deletes on jobs (on purpose — see
@@ -2811,7 +2963,7 @@
         var age = ageById[j.id];
         var note = age==null ? "" : (age===0 ? "Priced today" : "Waiting " + age + " day" + (age===1?"":"s") + (j.pricedAt ? "" : " (approx.)"));
         var style = (age!=null && age>=5) ? "color:#b3261e; font-weight:700;" : "";
-        html += renderJobCard(j, {admin:true, agingNote: note, agingNoteStyle: style});
+        html += renderJobCard(j, {admin:true, agingNote: note, agingNoteStyle: style, pricingNoteEditable: true});
       });
       html += '</div></div>';
     });
@@ -4230,7 +4382,7 @@
       // happened until you hit Back (which cleared viewingJobId) and tried again
       // from the list. Clear it here so the update form shows immediately.
       state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null;
-      state.editingLogMaterialsCostId=null; state.editingLogDateId=null; state.drewPricingView=false;
+      state.editingLogMaterialsCostId=null; state.editingLogDateId=null; state.editingPricingNoteId=null; state.movingLogId=null; state.drewPricingView=false;
       render();
     }); });
     var backBtn = root.querySelector('[data-action="back-to-list"]');
@@ -4280,6 +4432,30 @@
       var input = f.querySelector('input[name="materialsCostQuick"]');
       quickSetMaterialsCost(logId, input ? input.value : "");
     }); });
+
+    // Pricing note — same quick inline pattern as materials cost above,
+    // but this one lives inside a job-card-tap card (data-view-job), which
+    // has its own click-to-open-detail handler. Every handler here must
+    // stop the click bubbling up to the card, or tapping "edit"/"Save"
+    // would also fire the card's navigate-to-detail click.
+    root.querySelectorAll("[data-add-pricing-note]").forEach(function(b){ b.addEventListener("click", function(e){
+      e.stopPropagation();
+      state.editingPricingNoteId = b.getAttribute("data-add-pricing-note"); render();
+    }); });
+    root.querySelectorAll("[data-cancel-pricing-note]").forEach(function(b){ b.addEventListener("click", function(e){
+      e.stopPropagation();
+      state.editingPricingNoteId = null; render();
+    }); });
+    root.querySelectorAll("[data-pricing-note-form]").forEach(function(f){
+      f.addEventListener("click", function(e){ e.stopPropagation(); });
+      f.addEventListener("submit", function(e){
+        e.preventDefault();
+        e.stopPropagation();
+        var jobId = f.getAttribute("data-pricing-note-form");
+        var input = f.querySelector('input[name="pricingNoteQuick"]');
+        quickSetPricingNote(jobId, input ? input.value : "");
+      });
+    });
 
     var newLeaveBtn = root.querySelector('[data-action="new-leave"]');
     if (newLeaveBtn) newLeaveBtn.addEventListener("click", function(){ state.logView="leave"; state.formMsg=null; render(); });
@@ -4488,7 +4664,7 @@
       // further in, not backing out, so the original card shouldn't get
       // overwritten.
       if (!state.viewingJobId) returnToJobId = b.getAttribute("data-view-job");
-      state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; state.editingLogDateId = null; state.sendToDrewOpen = false; render();
+      state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; state.editingLogDateId = null; state.editingPricingNoteId = null; state.movingLogId = null; state.sendToDrewOpen = false; render();
     }); });
     root.querySelectorAll("[data-view-job-drew]").forEach(function(b){ b.addEventListener("click", function(){
       if (!state.viewingJobId) returnToJobId = b.getAttribute("data-view-job-drew");
@@ -4498,7 +4674,7 @@
     }); });
     var closeJobDetailBtn = root.querySelector('[data-action="close-job-detail"]');
     if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){
-      state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null; state.editingLogDateId=null;
+      state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null; state.editingLogDateId=null; state.editingPricingNoteId=null; state.movingLogId=null;
       state.drewPricingView=false; state.drewSaving=false; state.drewSaved=false; state.drewPriceMsg=null; state.sendToDrewOpen=false;
       render();
       // A raw pixel scroll position didn't reliably survive the swap back
@@ -4753,6 +4929,42 @@
     if (confirmUnmergeBtn) confirmUnmergeBtn.addEventListener("click", function(){
       performUnmerge(state.unmergeTargetId, state.unmergeSelected.slice());
     });
+
+    // Move a single visit onto a different job — see renderMoveLogPicker.
+    root.querySelectorAll("[data-move-log]").forEach(function(b){ b.addEventListener("click", function(){
+      state.movingLogId = b.getAttribute("data-move-log");
+      state.moveLogQuery = ""; state.moveLogTargetCandidateId = null;
+      state.openLogActionsId = null;
+      render();
+    }); });
+    var cancelMoveLogBtn = root.querySelector('[data-action="cancel-move-log"]');
+    if (cancelMoveLogBtn) cancelMoveLogBtn.addEventListener("click", function(){
+      state.movingLogId = null; state.moveLogQuery = ""; state.moveLogTargetCandidateId = null;
+      render();
+    });
+    var cancelMoveLogTargetBtn = root.querySelector('[data-action="cancel-move-log-target"]');
+    if (cancelMoveLogTargetBtn) cancelMoveLogTargetBtn.addEventListener("click", function(){
+      state.moveLogTargetCandidateId = null;
+      render();
+    });
+    var confirmMoveLogBtn = root.querySelector('[data-action="confirm-move-log"]');
+    if (confirmMoveLogBtn) confirmMoveLogBtn.addEventListener("click", function(){
+      moveLogToJob(state.movingLogId, state.moveLogTargetCandidateId);
+    });
+    root.querySelectorAll("[data-pick-move-log-target]").forEach(function(b){ b.addEventListener("click", function(){
+      state.moveLogTargetCandidateId = b.getAttribute("data-pick-move-log-target");
+      render();
+    }); });
+    var moveLogSearchInput = document.getElementById("move-log-search-input");
+    if (moveLogSearchInput){
+      moveLogSearchInput.addEventListener("input", function(){
+        var pos = moveLogSearchInput.selectionStart;
+        state.moveLogQuery = moveLogSearchInput.value;
+        render();
+        var el = document.getElementById("move-log-search-input");
+        if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
+      });
+    }
 
     var askTrashBtn = root.querySelector('[data-action="ask-trash-job"]');
     if (askTrashBtn) askTrashBtn.addEventListener("click", function(){
@@ -5490,6 +5702,17 @@
     }
     db.collection("job-logs").doc(logId).update(patch)
       .then(function(){ state.editingLogMaterialsCostId = null; toast("Materials cost saved"); render(); })
+      .catch(function(){ toast("Couldn't save that — try again."); });
+  }
+
+  // Quick inline note on a priced job — e.g. "Waiting on a PO" — so Grace
+  // can jot down why an aging/overdue job hasn't been invoiced yet without
+  // leaving the Priced list to open the full job.
+  function quickSetPricingNote(jobId, rawValue){
+    if (!db || !jobId) return;
+    var trimmed = (rawValue || "").trim();
+    db.collection("jobs").doc(jobId).update({ pricingNote: trimmed || null })
+      .then(function(){ state.editingPricingNoteId = null; toast(trimmed ? "Note saved" : "Note cleared"); render(); })
       .catch(function(){ toast("Couldn't save that — try again."); });
   }
 
