@@ -473,6 +473,7 @@
     mergeSourceId: null, mergeQuery: "", mergeTargetCandidateId: null,
     unmergeTargetId: null, unmergeSelected: [],
     movingLogId: null, moveLogQuery: "", moveLogTargetCandidateId: null,
+    groupJobBrowseOpen: false, groupJobQuery: "",
     trashConfirmJobId: null, trashConfirmLeaveId: null, trashConfirmLogId: null,
     openLogActionsId: null,
     editingLogMaterialsCostId: null, editingLogDateId: null,
@@ -990,6 +991,10 @@
         return html + renderRecentForMe(me);
       }
     }
+    if (state.groupJobBrowseOpen){
+      html += renderGroupJobBrowser(me);
+      return html + renderRecentForMe(me);
+    }
     if (state.logView === "leave"){
       html += renderLeaveForm({mode:"new"});
       return html + renderRecentForMe(me);
@@ -1047,6 +1052,7 @@
     html += '<div class="section-title">Your jobs</div>';
     html += '<p class="section-sub">Not finished yet? Add an update instead of starting a new one. Taking sick, annual, or trade-school leave? Use the leave button instead — it\'s not a job.</p>';
     html += '<button class="btn btn-primary btn-block" style="margin-bottom:8px" data-action="new-job">Start a new job</button>';
+    html += '<button class="btn btn-outline btn-block" style="margin-bottom:8px" data-action="browse-group-jobs">Add update to a group job</button>';
     html += '<button class="btn btn-outline btn-block" style="margin-bottom:8px" data-action="new-leave">Add a leave day</button>';
     html += '<button class="btn btn-outline btn-block" style="margin-bottom:8px" data-action="view-timesheet">View your timesheet</button>';
     html += '<button class="btn btn-outline btn-block" style="margin-bottom:14px" data-action="view-calendar">View your calendar'+(myScheduledCount?' ('+myScheduledCount+')':'')+'</button>';
@@ -1081,6 +1087,70 @@
     }
     html += '</div>';
     html += renderRecentLeaveForMe(me);
+    return html;
+  }
+
+  // ---------- Find a group job to add an update to, instead of starting a
+  // new (duplicate) one ----------
+  // Only ever shows jobs management has explicitly flagged as a "group job"
+  // (see the "Mark as a group job" action in renderJobDetailView) — not
+  // every job, which would be both noisy and a privacy problem. For each
+  // one, crew see who else is already on it and which dates, so they can
+  // tell it's the right job — never hours or materials cost, which stay
+  // management-only even here.
+  function renderGroupJobBrowser(me){
+    var backBtn = '<button type="button" class="btn btn-ghost" data-action="cancel-browse-group-jobs" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    var html = '<div class="card">';
+    html += backBtn;
+    html += '<div class="section-title">Find a group job</div>';
+    html += '<p class="section-sub">For a big job more than one of you is on. Find it here and add your update to it, instead of starting a new job that\'ll just need merging later. You\'ll see who else is on it and which dates &mdash; not their hours or costs.</p>';
+    html += field("Search by venue", '<input type="text" id="group-job-search-input" placeholder="e.g. Deer Park" value="'+esc(state.groupJobQuery||"")+'" autocomplete="off">');
+    html += '</div>';
+
+    function candidateCard(j){
+      // Built from job-logs directly (name + date only) rather than the
+      // ordinary visit-row rendering, so there's no risk of hours or
+      // materials cost leaking into a view crew see before they're
+      // actually on the job.
+      var byName = {}, nameOrder = [];
+      jobLogsFor(j.id).forEach(function(l){
+        var name = l.submittedBy || "Unknown";
+        if (!byName[name]){ byName[name] = []; nameOrder.push(name); }
+        if (l.date && byName[name].indexOf(l.date) === -1) byName[name].push(l.date);
+      });
+      var c = '<div class="job-card">';
+      c += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
+      if (j.jobDescription) c += '<div class="hint" style="margin-top:2px">'+esc(j.jobDescription)+'</div>';
+      c += '</div></div>';
+      if (nameOrder.length){
+        c += '<div class="hint" style="margin-top:8px"><strong>Already on this job:</strong></div>';
+        nameOrder.forEach(function(name){
+          var dates = byName[name].slice().sort().reverse().map(function(d){ return fmtShort(d); }).join(", ");
+          c += '<div class="hint" style="margin-top:2px">'+esc(name)+' &mdash; '+esc(dates)+'</div>';
+        });
+      } else {
+        c += '<div class="hint" style="margin-top:8px">No visits logged yet.</div>';
+      }
+      c += '<button type="button" class="btn btn-outline btn-sm" style="margin-top:10px" data-pick-group-job="'+esc(j.id)+'">Add your update here</button>';
+      c += '</div>';
+      return c;
+    }
+
+    var q = (state.groupJobQuery||"").trim().toLowerCase();
+    var candidates = visibleJobs().filter(function(j){ return j.groupJob && j.open !== false; });
+    if (q) candidates = candidates.filter(function(j){ return (j.venue||"").toLowerCase().indexOf(q) !== -1 || (j.jobDescription||"").toLowerCase().indexOf(q) !== -1; });
+    candidates.sort(function(a,b){ return (b.lastUpdatedAt||b.createdAt||"").localeCompare(a.lastUpdatedAt||a.createdAt||""); });
+    candidates = candidates.slice(0,25);
+
+    html += '<div class="card">';
+    html += '<div class="section-title" style="font-size:15px">'+(q?"Search results":"Open group jobs")+'</div>';
+    if (candidates.length === 0){
+      html += '<p class="empty-note">'+(q?"No group jobs match.":"No group jobs flagged right now &mdash; ask your manager to flag one if you need this.")+'</p>';
+      html += '</div>';
+      return html;
+    }
+    html += '</div>';
+    candidates.forEach(function(j){ html += candidateCard(j); });
     return html;
   }
 
@@ -1740,6 +1810,10 @@
     html += '</div>';
     html += '<div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">';
     if (j.isMerged){ html += '<span class="pill" style="background:var(--amber-soft); color:var(--amber-ink); border:1px solid var(--amber);">Combined job</span>'; }
+    // Flagged by management on a big job more than one crew member goes
+    // to — see renderGroupJobBrowser — so it's obvious why several people's
+    // updates are landing on the same job, not duplicated ones.
+    if (j.groupJob){ html += '<span class="pill pill-neutral">Group job</span>'; }
     if (!opts.employeeView && j.drewComments){ html += '<span class="pill" style="background:var(--amber-soft); color:var(--amber-ink); border:1px solid var(--amber);">&#128172; Note from Drew</span>'; }
     html += '<span class="pill '+statusPillClass(j.status)+'">'+statusLabel(j.status)+'</span>';
     if (!opts.employeeView && latestLog){
@@ -1891,7 +1965,7 @@
     // grouped together on the right, instead of a bigger name block, a
     // separate row of name chips, and status/price stacked far away from
     // each other. ----
-    html += '<div class="job-head"><div><div class="log-venue" style="font-size:18px">'+esc(j.venue)+'</div>';
+    html += '<div class="job-head"><div><div class="log-venue" style="font-size:18px">'+esc(j.venue)+(j.groupJob?' <span class="pill pill-neutral" style="font-size:11px; vertical-align:middle;">Group job</span>':'')+'</div>';
     var metaBits = [];
     if (j.assignedEmployees && j.assignedEmployees.length) metaBits.push(esc(j.assignedEmployees.join(", ")));
     if (j.client) metaBits.push(esc(j.client));
@@ -1978,6 +2052,11 @@
         if (j.isMerged){
           html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-unmerge" data-job-id="'+esc(j.id)+'">Unmerge&hellip;</button>';
         }
+        // A big job several crew members go to — flagging it here lets them
+        // all find and add their own update to THIS job from their own
+        // phone (see renderGroupJobBrowser), instead of each starting a new
+        // one and this needing merging after the fact.
+        html += '<button type="button" class="btn btn-ghost btn-sm" data-action="toggle-group-job" data-job-id="'+esc(j.id)+'">'+(j.groupJob ? "Remove group job flag" : "Mark as a group job") + '</button>';
       }
       html += '</div>';
     }
@@ -4329,7 +4408,7 @@
   // ---------- events ----------
   function bindEvents(){
     root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){
-      state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.editingJobId=null; state.viewingJobId=null; state.drewPricingView=false; state.sendToDrewOpen=false;
+      state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.editingJobId=null; state.viewingJobId=null; state.drewPricingView=false; state.sendToDrewOpen=false; state.groupJobBrowseOpen=false;
       state.bulkMergeActive=false; state.bulkMergeSelected=[]; state.bulkMergeReviewing=false;
       state.bulkMergeTargetId=null; state.bulkMergeRenameOverride=null; state.bulkMergeDateKey=null;
       render();
@@ -4907,6 +4986,17 @@
       performBulkMerge(state.bulkMergeSelected, state.bulkMergeTargetId, nameInput ? nameInput.value : "");
     });
 
+    var toggleGroupJobBtn = root.querySelector('[data-action="toggle-group-job"]');
+    if (toggleGroupJobBtn) toggleGroupJobBtn.addEventListener("click", function(){
+      var jobId = toggleGroupJobBtn.getAttribute("data-job-id");
+      var job = state.jobs.filter(function(x){ return x.id === jobId; })[0];
+      if (!job || !db) return;
+      var next = !job.groupJob;
+      db.collection("jobs").doc(jobId).update({ groupJob: next, lastUpdatedAt: new Date().toISOString() })
+        .then(function(){ toast(next ? "Marked as a group job" : "No longer a group job"); render(); })
+        .catch(function(){ toast("Couldn't update that — try again."); });
+    });
+
     var startUnmergeBtn = root.querySelector('[data-action="start-unmerge"]');
     if (startUnmergeBtn) startUnmergeBtn.addEventListener("click", function(){
       state.unmergeTargetId = startUnmergeBtn.getAttribute("data-job-id");
@@ -4962,6 +5052,32 @@
         state.moveLogQuery = moveLogSearchInput.value;
         render();
         var el = document.getElementById("move-log-search-input");
+        if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
+      });
+    }
+
+    // Finding (and adding to) a group job — see renderGroupJobBrowser.
+    var browseGroupJobsBtn = root.querySelector('[data-action="browse-group-jobs"]');
+    if (browseGroupJobsBtn) browseGroupJobsBtn.addEventListener("click", function(){
+      state.groupJobBrowseOpen = true; state.groupJobQuery = ""; render();
+    });
+    var cancelBrowseGroupJobsBtn = root.querySelector('[data-action="cancel-browse-group-jobs"]');
+    if (cancelBrowseGroupJobsBtn) cancelBrowseGroupJobsBtn.addEventListener("click", function(){
+      state.groupJobBrowseOpen = false; state.groupJobQuery = ""; render();
+    });
+    root.querySelectorAll("[data-pick-group-job]").forEach(function(b){ b.addEventListener("click", function(){
+      var jobId = b.getAttribute("data-pick-group-job");
+      state.groupJobBrowseOpen = false; state.groupJobQuery = "";
+      state.logView = "update"; state.updateJobId = jobId; state.formMsg = null; state.continuingDraftId = null;
+      render();
+    }); });
+    var groupJobSearchInput = document.getElementById("group-job-search-input");
+    if (groupJobSearchInput){
+      groupJobSearchInput.addEventListener("input", function(){
+        var pos = groupJobSearchInput.selectionStart;
+        state.groupJobQuery = groupJobSearchInput.value;
+        render();
+        var el = document.getElementById("group-job-search-input");
         if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
       });
     }
