@@ -474,6 +474,11 @@
     unmergeTargetId: null, unmergeSelected: [],
     movingLogId: null, moveLogQuery: "", moveLogTargetCandidateId: null,
     groupJobBrowseOpen: false, groupJobQuery: "",
+    quoteDetailView: false, drewQuotingView: false,
+    quoteFormOpen: false, editingQuoteId: null, quoteSaving: false, quoteFormMsg: null,
+    quoteQuery: "", drewSub: "invoices",
+    drewQuoteSaving: false, drewQuoteSaved: false, drewQuotePriceMsg: null,
+    quoteDeclineConfirmId: null,
     trashConfirmJobId: null, trashConfirmLeaveId: null, trashConfirmLogId: null,
     openLogActionsId: null,
     editingLogMaterialsCostId: null, editingLogDateId: null,
@@ -812,7 +817,16 @@
   // (management and crew) should build from this, not state.jobs directly —
   // a merged or trashed job's own doc sticks around (Firestore rules forbid
   // deleting it) but should never show up as if it were still a live job.
-  function visibleJobs(){ return state.jobs.filter(function(j){ return !j.mergedInto && !j.trashed; }); }
+  // Quotes (see quoteJobs below) live in the same "jobs" collection as real
+  // jobs — flagged isQuote — but have no visits logged against them yet and
+  // shouldn't show up anywhere an ordinary job would (Jobs, By Crew, For
+  // Drew's invoice queue, Priced, Overview, merge/move-log pickers, search).
+  // This is the one place that exclusion needs to live, since every one of
+  // those views is built on top of visibleJobs().
+  function visibleJobs(){ return state.jobs.filter(function(j){ return !j.mergedInto && !j.trashed && !j.isQuote; }); }
+  // Every quote, management's own list on the Quote jobs tab — the mirror
+  // image of visibleJobs() above.
+  function quoteJobs(){ return state.jobs.filter(function(j){ return j.isQuote && !j.trashed; }); }
   // Invoiced jobs are fully closed out — Grace wants them out of every
   // ordinary view (Overview, Jobs, By Crew, For Drew) and reachable only
   // from the dedicated Invoiced tab (or Trash, if one gets trashed).
@@ -867,6 +881,10 @@
       html += renderMoveLogPicker();
     } else if (state.viewingScheduleId){
       html += renderScheduleDetail();
+    } else if (state.viewingJobId && state.drewQuotingView){
+      html += renderDrewQuoteView();
+    } else if (state.viewingJobId && state.quoteDetailView){
+      html += renderQuoteDetailView();
     } else if (state.viewingJobId && state.drewPricingView){
       html += renderDrewPricingView();
     } else if (state.viewingJobId){
@@ -1052,7 +1070,7 @@
     html += '<div class="section-title">Your jobs</div>';
     html += '<p class="section-sub">Not finished yet? Add an update instead of starting a new one. Taking sick, annual, or trade-school leave? Use the leave button instead — it\'s not a job.</p>';
     html += '<button class="btn btn-primary btn-block" style="margin-bottom:8px" data-action="new-job">Start a new job</button>';
-    html += '<button class="btn btn-outline btn-block" style="margin-bottom:8px" data-action="browse-group-jobs">Add update to a group job</button>';
+    html += '<button class="btn btn-outline btn-block" style="margin-bottom:8px" data-action="browse-group-jobs">Add update to a group/quoted job</button>';
     html += '<button class="btn btn-outline btn-block" style="margin-bottom:8px" data-action="new-leave">Add a leave day</button>';
     html += '<button class="btn btn-outline btn-block" style="margin-bottom:8px" data-action="view-timesheet">View your timesheet</button>';
     html += '<button class="btn btn-outline btn-block" style="margin-bottom:14px" data-action="view-calendar">View your calendar'+(myScheduledCount?' ('+myScheduledCount+')':'')+'</button>';
@@ -1090,19 +1108,21 @@
     return html;
   }
 
-  // ---------- Find a group job to add an update to, instead of starting a
-  // new (duplicate) one ----------
+  // ---------- Find a group/quoted job to add an update to, instead of
+  // starting a new (duplicate) one ----------
   // Only ever shows jobs management has explicitly flagged as a "group job"
   // (see the "Mark as a group job" action in renderJobDetailView) — not
-  // every job, which would be both noisy and a privacy problem. For each
-  // one, crew see who else is already on it and which dates, so they can
-  // tell it's the right job — never hours or materials cost, which stay
-  // management-only even here.
+  // every job, which would be both noisy and a privacy problem. A quote
+  // that's been accepted and turned into a real job is flagged this way
+  // automatically too (see convertQuoteToJob), since those are exactly the
+  // bigger jobs several crew end up on. For each one, crew see who else is
+  // already on it and which dates, so they can tell it's the right job —
+  // never hours or materials cost, which stay management-only even here.
   function renderGroupJobBrowser(me){
     var backBtn = '<button type="button" class="btn btn-ghost" data-action="cancel-browse-group-jobs" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
     var html = '<div class="card">';
     html += backBtn;
-    html += '<div class="section-title">Find a group job</div>';
+    html += '<div class="section-title">Find a group/quoted job</div>';
     html += '<p class="section-sub">For a big job more than one of you is on. Find it here and add your update to it, instead of starting a new job that\'ll just need merging later. You\'ll see who else is on it and which dates &mdash; not their hours or costs.</p>';
     html += field("Search by venue", '<input type="text" id="group-job-search-input" placeholder="e.g. Deer Park" value="'+esc(state.groupJobQuery||"")+'" autocomplete="off">');
     html += '</div>';
@@ -1640,8 +1660,8 @@
   // gets Jobs (no prices — see renderJobsAdmin) and the shared Calendar.
   // Everything else (pricing queues, timesheets, subcontractor $, crew/PIN
   // management, trash) stays admin-only.
-  var MGMT_TABS_ADMIN = [["overview","Overview"],["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["invoiced","Invoiced"],["timesheets","Timesheets"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]];
-  var MGMT_TABS_LEAD = [["jobs","Jobs"],["assign","Assign"],["calendar","Calendar"]];
+  var MGMT_TABS_ADMIN = [["overview","Overview"],["jobs","Jobs"],["assign","Assign"],["quotejobs","Quote jobs"],["calendar","Calendar"],["bycrew","By Crew"],["drew","For Drew"],["priced","Priced"],["invoiced","Invoiced"],["timesheets","Timesheets"],["subs","Subcontractors"],["crew","Crew"],["trash","Trash"]];
+  var MGMT_TABS_LEAD = [["jobs","Jobs"],["assign","Assign"],["quotejobs","Quote jobs"],["calendar","Calendar"]];
 
   function renderManagementTab(){
     var tabs = isAdmin() ? MGMT_TABS_ADMIN : MGMT_TABS_LEAD;
@@ -1656,6 +1676,7 @@
     if (state.mgmtSub === "overview") html += renderOverview();
     else if (state.mgmtSub === "jobs") html += renderJobsAdmin();
     else if (state.mgmtSub === "assign") html += renderAssignTab();
+    else if (state.mgmtSub === "quotejobs") html += renderQuoteJobsTab();
     else if (state.mgmtSub === "calendar") html += renderCalendarView();
     else if (state.mgmtSub === "bycrew") html += renderByCrew();
     else if (state.mgmtSub === "drew") html += renderForDrew();
@@ -2003,6 +2024,10 @@
     if (admin && j.comments) html += '<div class="hint" style="margin-top:8px">Notes: '+esc(j.comments)+'</div>';
     if (admin && j.drewComments) html += '<div class="msg" style="margin-top:8px; background:var(--amber-soft); color:var(--amber-ink); border:1px solid var(--amber); border-radius:8px; padding:10px 12px;"><strong>From Drew:</strong> '+esc(j.drewComments)+'</div>';
     if (admin && j.pricingNote) html += '<div class="hint" style="margin-top:8px">&#128172; Pricing note: '+esc(j.pricingNote)+'</div>';
+    // Carried over from when this was a quote (see convertQuoteToJob) —
+    // what was promised to the client, kept visible as a reference while
+    // actually invoicing it, which can come out a little different.
+    if (admin && !j.isQuote && j.quotedPrice != null) html += '<div class="hint" style="margin-top:8px">Quoted at $'+Number(j.quotedPrice).toFixed(2)+'</div>';
 
     // Only the actions used on most jobs, most of the time, sit in view by
     // default. Print/Copy for invoice/Send to Drew/Merge are all real
@@ -2882,13 +2907,58 @@
   }
 
   // ---------- For Drew: jobs sent through for pricing ----------
+  // Real jobs awaiting an invoice price — same filter renderForDrew always
+  // used, just pulled out to a named helper now there are two queues to
+  // count (see the sub-tab counts above).
+  function jobsAwaitingDrew(){
+    return nonInvoicedJobs().filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
+  }
+  // Quotes awaiting Drew's price — the equivalent of nonInvoicedJobs()'s
+  // needsPricing filter, but for quotes, which live outside visibleJobs()
+  // entirely (see quoteJobs above) so they need their own, separate lookup.
+  function quotesAwaitingDrew(){
+    return state.jobs.filter(function(j){ return j.isQuote && !j.trashed && j.quoteStatus !== "quoted" && j.quoteStatus !== "declined"; });
+  }
+
   function renderForDrew(){
-    var awaiting = nonInvoicedJobs().filter(function(j){ return j.needsPricing && (j.invoiceAmount==null || j.invoiceAmount===""); });
+    var sub = state.drewSub === "quotes" ? "quotes" : "invoices";
+    var html = '<div class="subtabs" style="margin-bottom:-2px">' +
+      '<button data-drew-sub="invoices" class="'+(sub==="invoices"?"on":"")+'">Invoices to price ('+jobsAwaitingDrew().length+')</button>' +
+      '<button data-drew-sub="quotes" class="'+(sub==="quotes"?"on":"")+'">Jobs to quote ('+quotesAwaitingDrew().length+')</button>' +
+    '</div>';
+
+    if (sub === "quotes"){
+      var qAwaiting = quotesAwaitingDrew();
+      qAwaiting.sort(byRecentJobActivity);
+      html += '<div class="card">';
+      html += '<div class="section-title">Jobs to quote</div><p class="section-sub">Quote requests submitted from site &mdash; no visits logged yet, these are estimates only.</p>';
+      if (qAwaiting.length===0){ html += '<p class="empty-note">Nothing waiting on a quote right now.</p>'; }
+      html += '</div>';
+      groupJobsByClient(qAwaiting).forEach(function(g){
+        html += '<div class="date-group">';
+        html += '<div class="date-heading"><span class="dow">'+esc(g.client||"No client listed")+'</span><span class="count">'+g.jobs.length+' job'+(g.jobs.length===1?"":"s")+'</span></div>';
+        html += '<div class="jobs-grid">';
+        g.jobs.forEach(function(j){
+          var c = '<div class="job-card">';
+          c += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
+          if (j.jobDescription) c += '<div class="hint" style="margin-top:2px">'+esc(j.jobDescription)+'</div>';
+          c += '</div></div>';
+          c += '<div class="hint" style="margin-top:8px">'+quoteEstimateSummary(j)+'</div>';
+          c += '<button type="button" class="btn btn-outline btn-sm" style="margin-top:10px" data-quote-this-job="'+esc(j.id)+'">Quote this job</button>';
+          c += '</div>';
+          html += c;
+        });
+        html += '</div></div>';
+      });
+      return html;
+    }
+
+    var awaiting = jobsAwaitingDrew();
     awaiting.sort(byRecentJobActivity);
     var q = (state.drewQuery || "").trim().toLowerCase();
     if (q) awaiting = awaiting.filter(function(j){ return jobMatchesSearch(j, q); });
 
-    var html = '<div class="card">';
+    html += '<div class="card">';
     html += '<div class="section-title">For Drew to price</div><p class="section-sub">Jobs sent through for Drew (or anyone in management) to price.</p>';
     html += field("Search", '<input type="text" id="drew-search-input" placeholder="e.g. Deer Park, shelf, VTASK 123" value="'+esc(state.drewQuery)+'" autocomplete="off">');
     if (awaiting.length===0){ html += '<p class="empty-note">'+(q?"No jobs match.":"Nothing waiting on a price right now.")+'</p>'; }
@@ -3693,6 +3763,386 @@
     });
   }
 
+  // ---------- Quote jobs ----------
+  // A quote is a prospective job that hasn't been booked in yet — sized up
+  // on site (by Jayden or management) before Drew puts a number on it, so
+  // the client can be given a price up front instead of this being worked
+  // out only after the fact from an invoice. Quotes are stored as ordinary
+  // "jobs" docs (reusing the collection's existing permissive Firestore
+  // rules rather than needing a whole new collection + rules deploy), just
+  // flagged isQuote:true and excluded from every ordinary job view by
+  // visibleJobs() above. Once Drew's priced one and management or Jayden
+  // taps "Start this job", isQuote flips to false and it becomes a normal
+  // job — see convertQuoteToJob.
+  function quoteStatusPill(j){
+    if (j.quoteStatus === "declined") return '<span class="pill pill-neutral">Declined</span>';
+    if (j.quoteStatus === "quoted" && j.quotedPrice != null) return '<span class="pill pill-success">$'+Number(j.quotedPrice).toFixed(2)+' quoted</span>';
+    return '<span class="pill pill-warning">Waiting on Drew</span>';
+  }
+  // Crew needed isn't always a flat number — "2 people day 1, 6 day 2, 3 day
+  // 3" is exactly the kind of thing this needs to carry, so it's stored (and
+  // shown) as whatever was written, never parsed into a count.
+  function quoteEstimateSummary(j){
+    var bits = [];
+    if (j.quoteEstimateAmount != null && j.quoteEstimateAmount !== ""){
+      var n = Number(j.quoteEstimateAmount);
+      var unitWord = j.quoteEstimateUnit === "hours" ? "hour" : "day";
+      bits.push("Approx. " + j.quoteEstimateAmount + " " + unitWord + (n === 1 ? "" : "s"));
+    }
+    if (j.quoteCrewNeeded) bits.push(j.quoteCrewNeeded);
+    return bits.length ? bits.join(" &middot; ") : "No estimate given";
+  }
+
+  function renderQuoteJobsTab(){
+    if (state.quoteFormOpen){
+      var editingQuote = state.editingQuoteId ? quoteJobs().filter(function(x){ return x.id === state.editingQuoteId; })[0] : null;
+      return renderQuoteForm({quote: editingQuote});
+    }
+
+    var quotes = quoteJobs();
+    var q = (state.quoteQuery || "").trim().toLowerCase();
+    if (q) quotes = quotes.filter(function(j){ return (j.venue||"").toLowerCase().indexOf(q) !== -1 || (j.jobDescription||"").toLowerCase().indexOf(q) !== -1; });
+
+    var awaiting = quotes.filter(function(j){ return j.quoteStatus !== "quoted" && j.quoteStatus !== "declined"; });
+    var quoted = quotes.filter(function(j){ return j.quoteStatus === "quoted"; });
+    var declined = quotes.filter(function(j){ return j.quoteStatus === "declined"; });
+    awaiting.sort(byRecentJobActivity); quoted.sort(byRecentJobActivity); declined.sort(byRecentJobActivity);
+
+    var html = '<div class="card">';
+    html += '<div class="section-title">Quote jobs</div><p class="section-sub">Sizing up a job before it\'s booked in? Submit the details here and Drew will send back a price &mdash; once the client\'s accepted it, turn it into a real job with one tap.</p>';
+    html += '<button type="button" class="btn btn-primary btn-block" data-action="new-quote">+ New quote</button>';
+    html += field("Search", '<input type="text" id="quote-search-input" placeholder="e.g. Deer Park" value="'+esc(state.quoteQuery)+'" autocomplete="off">');
+    if (quotes.length === 0){ html += '<p class="empty-note">'+(q?"No quotes match.":"No quotes submitted yet.")+'</p>'; }
+    html += '</div>';
+
+    function quoteCard(j){
+      var c = '<div class="job-card job-card-tap" data-view-quote="'+esc(j.id)+'">';
+      c += '<div class="job-head"><div><div class="log-venue">'+esc(j.venue)+'</div>';
+      if (j.jobDescription) c += '<div class="hint" style="margin-top:2px">'+esc(j.jobDescription)+'</div>';
+      c += '</div>' + quoteStatusPill(j) + '</div>';
+      c += '<div class="hint" style="margin-top:8px">'+quoteEstimateSummary(j)+' &middot; '+esc(j.submittedBy||"")+'</div>';
+      c += '</div>';
+      return c;
+    }
+    function section(title, list){
+      if (!list.length) return "";
+      var h = '<div class="date-group"><div class="date-heading"><span class="dow">'+esc(title)+'</span><span class="count">'+list.length+'</span></div><div class="jobs-grid">';
+      list.forEach(function(j){ h += quoteCard(j); });
+      return h + '</div></div>';
+    }
+    html += section("Awaiting a price", awaiting);
+    html += section("Quoted", quoted);
+    html += section("Declined", declined);
+    return html;
+  }
+
+  function renderQuoteForm(opts){
+    opts = opts || {};
+    var quote = opts.quote || null;
+    var unit = (quote && quote.quoteEstimateUnit) || "days";
+
+    var html = '<div class="card">';
+    html += '<button type="button" class="btn btn-ghost" style="margin-bottom:8px; padding-left:0" data-action="cancel-quote-form">&larr; Back</button>';
+    html += '<div class="section-title">'+(quote?"Edit quote":"New quote")+'</div>';
+    if (state.quoteFormMsg) html += '<div class="msg msg-error">'+esc(state.quoteFormMsg)+'</div>';
+    html += '<form id="quote-form" data-quote-id="'+(quote?esc(quote.id):"")+'">';
+    html += field("Venue name", '<input type="text" name="venue" placeholder="e.g. The Oak Tavern, 14 Marlow St" value="'+esc(quote?quote.venue||"":"")+'" required>');
+    html += field("Client", '<div class="seg" data-seg="quoteClient">' +
+      CLIENT_OPTIONS.map(function(c){ return '<button type="button" data-val="'+esc(c)+'" class="'+((quote && quote.client)===c?"on":"")+'">'+esc(c)+'</button>'; }).join("") +
+    '</div>');
+    html += field("What’s the job?", '<textarea name="jobDescription" placeholder="What needs doing, and anything Drew should know before pricing it" required>'+esc(quote?quote.jobDescription||"":"")+'</textarea>');
+    html += '<div class="field"><label>Roughly how long will it take?</label><div class="seg" data-seg="quoteEstimateUnit">' +
+      '<button type="button" data-val="days" class="'+(unit==="days"?"on":"")+'">Days</button>' +
+      '<button type="button" data-val="hours" class="'+(unit==="hours"?"on":"")+'">Hours</button>' +
+    '</div></div>';
+    html += '<div class="field"><label id="quote-estimate-label">Approx. '+esc(unit)+'</label><input type="text" inputmode="decimal" name="quoteEstimateAmount" value="'+(quote && quote.quoteEstimateAmount!=null?esc(quote.quoteEstimateAmount):"")+'"></div>';
+    // Free text, not a number — crew needed is often uneven across the job
+    // ("2 people day 1, 6 day 2, 3 day 3"), and Drew needs to see exactly
+    // what was written, not a single count that can't carry that.
+    html += field("Crew needed", '<textarea name="quoteCrewNeeded" placeholder="e.g. 2 people &#8212; or if it varies: Day 1: 2 people, Day 2: 6 people, Day 3: 3 people">'+esc(quote?quote.quoteCrewNeeded||"":"")+'</textarea>');
+    html += field("Materials expected", '<textarea name="quoteMaterialsNote" placeholder="Treated pine, decking oil, fixings...">'+esc(quote?quote.quoteMaterialsNote||"":"")+'</textarea>');
+    html += field("Approx. materials cost", '<input type="text" inputmode="decimal" name="quoteMaterialsCost" placeholder="e.g. 850.00" value="'+(quote && quote.quoteMaterialsCost!=null?esc(quote.quoteMaterialsCost):"")+'">');
+    html += field("Site contact (optional)", '<input type="text" name="quoteSiteContact" placeholder="Name and phone, if there’s someone onsite to call" value="'+esc(quote?quote.quoteSiteContact||"":"")+'">');
+    html += field("Photos", '<input type="file" name="photos" accept="image/*" multiple>');
+    if (quote && quote.photoUrls && quote.photoUrls.length){
+      html += '<p class="hint" style="margin-top:-10px">Already attached: '+quote.photoUrls.length+' photo'+(quote.photoUrls.length===1?"":"s")+' &mdash; uploading more adds to these.</p>';
+    }
+    html += field("Comments for Drew (optional)", '<textarea name="comments" placeholder="Access issues, timing constraints, anything unusual">'+esc(quote?quote.comments||"":"")+'</textarea>');
+    html += '<button type="submit" class="btn btn-primary btn-block" style="margin-top:6px" '+(state.quoteSaving?"disabled":"")+'>'+(state.quoteSaving?"Submitting…":(quote?"Save changes":"Submit for pricing"))+'</button>';
+    html += '</form>';
+    html += '</div>';
+    return html;
+  }
+
+  function onSubmitQuoteForm(e){
+    e.preventDefault();
+    if (!db) return;
+    var f = e.target;
+    var quoteId = f.getAttribute("data-quote-id") || null;
+    var venue = f.venue.value.trim();
+    var jobDescription = f.jobDescription.value.trim();
+    if (!venue || !jobDescription){
+      state.quoteFormMsg = "Fill in the venue and what the job is before submitting.";
+      render(); return;
+    }
+    var clientOn = f.querySelector('[data-seg="quoteClient"] .on');
+    var unitOn = f.querySelector('[data-seg="quoteEstimateUnit"] .on');
+    var patch = {
+      isQuote: true,
+      venue: venue,
+      jobDescription: jobDescription,
+      client: clientOn ? clientOn.getAttribute("data-val") : null,
+      quoteEstimateUnit: unitOn ? unitOn.getAttribute("data-val") : "days",
+      quoteEstimateAmount: f.quoteEstimateAmount.value.trim() || null,
+      quoteCrewNeeded: f.quoteCrewNeeded.value.trim() || null,
+      quoteMaterialsNote: f.quoteMaterialsNote.value.trim() || null,
+      quoteSiteContact: f.quoteSiteContact.value.trim() || null,
+      comments: f.comments.value.trim() || null,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+    var costRaw = f.quoteMaterialsCost.value.trim();
+    if (costRaw){
+      var costNum = parseFloat(costRaw);
+      if (!isNaN(costNum) && costNum >= 0) patch.quoteMaterialsCost = Math.round(costNum*100)/100;
+    } else {
+      patch.quoteMaterialsCost = null;
+    }
+    var files = (f.photos && f.photos.files) ? Array.prototype.slice.call(f.photos.files) : [];
+
+    state.quoteSaving = true; state.quoteFormMsg = null; render();
+
+    var ref = quoteId ? db.collection("jobs").doc(quoteId) : db.collection("jobs").doc();
+    var isNew = !quoteId;
+    if (isNew){
+      patch.quoteStatus = "awaiting";
+      patch.submittedBy = (state.session && state.session.name) || "";
+      patch.createdAt = new Date().toISOString();
+    }
+
+    var uploadPromise = (files.length && storage)
+      ? Promise.all(files.map(function(file, i){
+          var path = "quote-photos/" + ref.id + "/" + Date.now() + "-" + i + "-" + file.name;
+          return storage.ref().child(path).put(file).then(function(snap){ return snap.ref.getDownloadURL(); });
+        }))
+      : Promise.resolve([]);
+
+    uploadPromise.then(function(urls){
+      if (urls.length){
+        patch.photoUrls = isNew ? urls : firebase.firestore.FieldValue.arrayUnion.apply(null, urls);
+      }
+      return isNew ? ref.set(patch) : ref.update(patch);
+    }).then(function(){
+      state.quoteSaving = false;
+      state.quoteFormOpen = false; state.editingQuoteId = null;
+      var msg = isNew ? "Quote submitted — Drew will take a look" : "Quote updated";
+      if (files.length && !storage) msg += " — heads up, the photos weren't attached (photo storage isn't set up yet)";
+      toast(msg);
+      render();
+    }).catch(function(){
+      state.quoteSaving = false;
+      state.quoteFormMsg = "Couldn't save that — try again.";
+      render();
+    });
+  }
+
+  // Management/Jayden's own read-only view of a single quote — venue,
+  // estimate, materials, photos, and whatever Drew's sent back, plus the
+  // actions that only management/Jayden (never Drew, never crew) get to
+  // take: editing details, declining it, and turning an accepted quote into
+  // a real job.
+  function renderQuoteDetailView(){
+    var j = state.jobs.filter(function(x){ return x.id === state.viewingJobId; })[0];
+    var backBtn = '<button type="button" class="btn btn-ghost" data-action="close-job-detail" style="margin-bottom:8px; padding-left:0">&larr; Back</button>';
+    if (!j || !j.isQuote){
+      return '<div class="card">'+backBtn+'<p class="empty-note">That quote isn\'t there anymore.</p></div>';
+    }
+    var html = '<div class="card">';
+    html += backBtn;
+    html += '<div class="job-head"><div><div class="log-venue" style="font-size:18px">'+esc(j.venue)+'</div>';
+    var metaBits = [];
+    if (j.client) metaBits.push(esc(j.client));
+    if (j.submittedBy) metaBits.push("Submitted by " + esc(j.submittedBy));
+    if (metaBits.length) html += '<div class="log-meta" style="margin-top:4px">'+metaBits.join(' &middot; ')+'</div>';
+    html += '</div>' + quoteStatusPill(j) + '</div>';
+
+    if (j.jobDescription) html += '<div class="log-desc" style="margin-top:8px; font-size:14px">'+esc(j.jobDescription)+'</div>';
+    html += '<div class="hint" style="margin-top:10px">'+quoteEstimateSummary(j)+'</div>';
+    if (j.quoteMaterialsNote || j.quoteMaterialsCost != null){
+      html += '<div class="hint" style="margin-top:4px">Materials: '+esc(j.quoteMaterialsNote||"(no note)")+(j.quoteMaterialsCost!=null?' &middot; $'+Number(j.quoteMaterialsCost).toFixed(2):'')+'</div>';
+    }
+    if (j.quoteSiteContact) html += '<div class="hint" style="margin-top:4px">Site contact: '+esc(j.quoteSiteContact)+'</div>';
+    if (j.comments) html += '<div class="hint" style="margin-top:8px">Notes for Drew: '+esc(j.comments)+'</div>';
+    if (j.photoUrls && j.photoUrls.length){
+      html += '<div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">';
+      j.photoUrls.forEach(function(url){
+        html += '<a href="'+esc(url)+'" target="_blank" rel="noopener"><img src="'+esc(url)+'" alt="" style="width:96px; height:96px; object-fit:cover; border-radius:8px; border:1px solid var(--line);"></a>';
+      });
+      html += '</div>';
+    }
+    if (j.quoteStatus === "quoted"){
+      html += '<div class="msg msg-info" style="margin-top:12px">Drew quoted <strong>$'+Number(j.quotedPrice).toFixed(2)+'</strong> ex GST ($'+gstInclusiveAmount(j.quotedPrice).toFixed(2)+' inc GST).'+(j.drewComments?' He added: &ldquo;'+esc(j.drewComments)+'&rdquo;':'')+'</div>';
+    }
+
+    html += '<div class="log-foot" style="margin-top:14px">';
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-action="edit-quote" data-job-id="'+esc(j.id)+'">Edit details</button>';
+    html += '</div>';
+
+    if (state.quoteDeclineConfirmId === j.id){
+      html += '<div class="msg msg-error" style="margin-top:10px">'+(j.quoteStatus==="declined"?"Un-decline this quote?":"Mark this quote as declined? It’ll move out of the way, but stays here if you need it back.")+'</div>';
+      html += '<div style="display:flex; gap:10px; margin-top:10px;">' +
+        '<button type="button" class="btn btn-primary" data-action="confirm-toggle-quote-declined" data-job-id="'+esc(j.id)+'">Yes'+(j.quoteStatus==="declined"?", un-decline it":", decline it")+'</button>' +
+        '<button type="button" class="btn btn-ghost" data-action="cancel-toggle-quote-declined">Cancel</button>' +
+      '</div>';
+    } else {
+      html += '<div class="log-foot" style="margin-top:6px;">';
+      html += '<button type="button" class="btn btn-outline btn-sm" style="color:#b3261e; border-color:#b3261e;" data-action="ask-toggle-quote-declined" data-job-id="'+esc(j.id)+'">'+(j.quoteStatus==="declined"?"Un-decline":"Mark as declined")+'</button>';
+      if (j.quoteStatus === "quoted"){
+        html += '<button type="button" class="btn btn-primary btn-sm" style="margin-left:auto" data-action="convert-quote" data-job-id="'+esc(j.id)+'">Client accepted &mdash; start this job</button>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function toggleQuoteDeclined(jobId){
+    if (!db || !jobId) return;
+    var j = state.jobs.filter(function(x){ return x.id === jobId; })[0];
+    if (!j) return;
+    var next = j.quoteStatus === "declined" ? (j.quotedPrice != null ? "quoted" : "awaiting") : "declined";
+    db.collection("jobs").doc(jobId).update({ quoteStatus: next, lastUpdatedAt: new Date().toISOString() })
+      .then(function(){
+        state.quoteDeclineConfirmId = null;
+        toast(next === "declined" ? "Marked as declined" : "Back in the active list");
+        render();
+      }).catch(function(){ toast("Couldn't update that — try again."); });
+  }
+
+  // Turns an accepted quote into a real job — same doc, same id, just
+  // isQuote flipped off so it drops out of quoteJobs() and appears in
+  // visibleJobs() like any other job from now on. Flagged as a group job
+  // straight away, since a quoted job is exactly the kind more than one
+  // crew member is likely to end up on (see renderGroupJobBrowser) — crew
+  // can find it and add their own update instead of starting a duplicate.
+  // Only ever reachable from management/Jayden's own quote detail view —
+  // Drew never sees this action, and neither does ordinary crew.
+  function convertQuoteToJob(jobId){
+    if (!db || !jobId) return;
+    var j = state.jobs.filter(function(x){ return x.id === jobId; })[0];
+    if (!j) return;
+    var now = new Date().toISOString();
+    // Deliberately leaves invoiceAmount/needsPricing untouched — the quoted
+    // price (kept on quotedPrice, below, purely as a reference once crew
+    // start logging visits) is what was promised to the client, not
+    // necessarily the final invoice; nothing's actually been done yet, so
+    // this shouldn't show up in Priced as "ready to invoice" the moment it
+    // starts. It goes through Send to Drew (or a manual price) the normal
+    // way once the work's actually finished.
+    var patch = {
+      isQuote: false,
+      groupJob: true,
+      open: true,
+      status: j.status || "in-process",
+      lastUpdatedAt: now,
+    };
+    db.collection("jobs").doc(jobId).update(patch).then(function(){
+      toast("Started — crew can add updates to it now");
+      state.viewingJobId = jobId; state.quoteDetailView = false; state.drewQuotingView = false;
+      render();
+    }).catch(function(){ toast("Couldn't start that job — try again."); });
+  }
+
+  // ---------- Drew pricing a quote (not yet a real job) ----------
+  // Deliberately separate from renderDrewPricingView — there's no visit
+  // history to show (nothing's happened onsite yet), just the estimate
+  // management/Jayden submitted, and a price to send back.
+  function renderDrewQuoteView(){
+    var j = state.jobs.filter(function(x){ return x.id === state.viewingJobId; })[0];
+    if (!j || !j.isQuote){
+      return '<div class="card"><p class="empty-note">That quote isn\'t there anymore.</p><button type="button" class="btn btn-outline" data-action="close-job-detail">&larr; Back</button></div>';
+    }
+    var html = '<button type="button" class="btn btn-ghost drew-back" data-action="close-job-detail" style="margin-bottom:8px; padding-left:0">&larr; Back to the list</button>';
+    html += '<div class="drew-card">';
+    html += '<div class="drew-venue">'+esc(j.venue||"")+'</div>';
+    html += '<div class="field" id="drew-client-seg-wrap"><label>Client</label><div class="seg" data-seg="client">' +
+      CLIENT_OPTIONS.map(function(c){
+        return '<button type="button" data-val="'+esc(c)+'" class="'+(j.client===c?"on":"")+'">'+esc(c)+'</button>';
+      }).join("") +
+    '</div></div>';
+    html += '<label class="drew-desc-label" for="drew-desc-input">Job description</label>';
+    html += '<textarea id="drew-desc-input" class="drew-desc-edit">'+esc(j.jobDescription||"")+'</textarea>';
+    html += '<div class="drew-edit-hint">This is an estimate, not a finished job &mdash; nothing’s been logged onsite yet.</div>';
+
+    if (j.comments) html += '<div class="drew-note-box"><div class="drew-note-label">Note from Grace</div><div class="drew-note-text">'+esc(j.comments)+'</div></div>';
+
+    html += '<div class="drew-section-label">Estimate</div>';
+    html += '<div class="drew-visit"><div><div class="who">Submitted by '+esc(j.submittedBy||"")+'</div>'+(j.createdAt?'<div class="when">'+esc(fmtDateHeading(j.createdAt.slice(0,10)))+'</div>':'')+'</div><div class="hrs">'+(j.quoteEstimateAmount!=null&&j.quoteEstimateAmount!==""?esc(j.quoteEstimateAmount)+' '+(j.quoteEstimateUnit==="hours"?"hrs":"days"):"?")+'</div></div>';
+    if (j.quoteCrewNeeded){
+      html += '<div class="drew-total-row" style="align-items:flex-start;"><div>Crew needed</div><div style="white-space:pre-wrap; text-align:right;">'+esc(j.quoteCrewNeeded)+'</div></div>';
+    }
+
+    html += '<div class="drew-section-label">Materials (estimated)</div>';
+    if (!j.quoteMaterialsNote && j.quoteMaterialsCost == null){
+      html += '<p class="empty-note">No materials noted.</p>';
+    } else {
+      html += '<div class="drew-mat-row"><div class="what">'+esc(j.quoteMaterialsNote||"(no note)")+'</div><div class="cost mono">'+(j.quoteMaterialsCost!=null?'$'+Number(j.quoteMaterialsCost).toFixed(2):'&mdash;')+'</div></div>';
+    }
+    if (j.quoteSiteContact) html += '<div class="drew-also" style="margin-top:8px;">Site contact: '+esc(j.quoteSiteContact)+'</div>';
+
+    if (j.photoUrls && j.photoUrls.length){
+      html += '<div class="drew-section-label">Photos</div>';
+      html += '<div style="display:flex; flex-wrap:wrap; gap:8px;">';
+      j.photoUrls.forEach(function(url){
+        html += '<a href="'+esc(url)+'" target="_blank" rel="noopener"><img src="'+esc(url)+'" alt="" style="width:96px; height:96px; object-fit:cover; border-radius:8px; border:1px solid var(--line);"></a>';
+      });
+      html += '</div>';
+    }
+
+    html += '<div class="drew-price-box">';
+    html += '<div class="drew-price-label">What would you quote this at?</div>';
+    if (state.drewQuotePriceMsg) html += '<div class="msg msg-error" style="margin-bottom:12px">'+esc(state.drewQuotePriceMsg)+'</div>';
+    html += '<div class="drew-price-input-wrap"><span class="drew-dollar">$</span>' +
+      '<input type="text" inputmode="decimal" class="drew-price-input" id="drew-quote-price-input" value="'+(j.quotedPrice!=null?esc(Number(j.quotedPrice).toFixed(2)):"")+'" placeholder="0.00"></div>';
+    html += '<div class="mono" id="drew-quote-gst-hint" style="margin-top:10px; font-size:16px; font-weight:700; color:var(--accent-strong);">'+drewGstHintText(j.quotedPrice)+'</div>';
+    html += '<button type="button" class="drew-save-btn" id="drew-quote-save-btn" data-job-id="'+esc(j.id)+'" '+(state.drewQuoteSaving?"disabled":"")+'>'+(state.drewQuoteSaving?"SAVING…":"SEND QUOTE TO GRACE")+'</button>';
+    if (state.drewQuoteSaved) html += '<div class="drew-saved-msg" style="display:block">&#10003; Saved &mdash; management will see it straight away.</div>';
+    html += '</div>';
+
+    html += '<div class="drew-comments-box">';
+    html += '<div class="drew-comments-label">Comments for Grace</div>';
+    html += '<div class="drew-comments-sub">Optional &mdash; conditions on the quote, what you’d need confirmed before starting.</div>';
+    html += '<textarea id="drew-quote-comments-input" class="drew-comments-input" placeholder="e.g. Price assumes no further rot once we open it up.">'+esc(j.drewComments||"")+'</textarea>';
+    html += '</div>';
+
+    html += '</div>';
+    return html;
+  }
+
+  function setQuotePrice(jobId, rawValue, descValue, commentsValue, clientValue){
+    if (!db || !jobId) return;
+    var trimmed = (rawValue || "").trim();
+    var num = parseFloat(trimmed);
+    if (trimmed === "" || isNaN(num) || num < 0){
+      state.drewQuotePriceMsg = "Enter a price before saving.";
+      render(); return;
+    }
+    var patch = { quotedPrice: Math.round(num*100)/100, quoteStatus: "quoted", quotedAt: new Date().toISOString(), lastUpdatedAt: new Date().toISOString() };
+    var descTrimmed = (descValue || "").trim();
+    if (descTrimmed) patch.jobDescription = descTrimmed;
+    patch.drewComments = (commentsValue || "").trim() || null;
+    if (clientValue) patch.client = clientValue;
+    state.drewQuoteSaving = true; state.drewQuotePriceMsg = null; state.drewQuoteSaved = false; render();
+    db.collection("jobs").doc(jobId).update(patch).then(function(){
+      state.drewQuoteSaving = false; state.drewQuoteSaved = true;
+      toast("Quote sent to Grace");
+      render();
+    }).catch(function(){
+      state.drewQuoteSaving = false;
+      state.drewQuotePriceMsg = "Couldn't save that — try again.";
+      render();
+    });
+  }
+
   // Shared month view for admin + lead — Management &gt; Calendar — showing
   // where everyone's scheduled to go. Tap a day to see who's where and remove
   // an entry if it was a mistake.
@@ -4409,6 +4859,7 @@
   function bindEvents(){
     root.querySelectorAll("[data-tab]").forEach(function(b){ b.addEventListener("click", function(){
       state.activeTab=b.getAttribute("data-tab"); state.logView="list"; state.editLogId=null; state.editLeaveId=null; state.editingJobId=null; state.viewingJobId=null; state.drewPricingView=false; state.sendToDrewOpen=false; state.groupJobBrowseOpen=false;
+      state.quoteDetailView=false; state.drewQuotingView=false; state.quoteFormOpen=false; state.editingQuoteId=null; state.quoteFormMsg=null; state.quoteDeclineConfirmId=null;
       state.bulkMergeActive=false; state.bulkMergeSelected=[]; state.bulkMergeReviewing=false;
       state.bulkMergeTargetId=null; state.bulkMergeRenameOverride=null; state.bulkMergeDateKey=null;
       render();
@@ -4462,6 +4913,7 @@
       // from the list. Clear it here so the update form shows immediately.
       state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null;
       state.editingLogMaterialsCostId=null; state.editingLogDateId=null; state.editingPricingNoteId=null; state.movingLogId=null; state.drewPricingView=false;
+      state.quoteDetailView=false; state.drewQuotingView=false;
       render();
     }); });
     var backBtn = root.querySelector('[data-action="back-to-list"]');
@@ -4623,6 +5075,10 @@
             if (nameInput && val==="alone") nameInput.value = "";
           }
           if (name === "leaveType" || name === "leaveHoursMode") updateLeaveHoursHint();
+          if (name === "quoteEstimateUnit"){
+            var estLabel = document.getElementById("quote-estimate-label");
+            if (estLabel) estLabel.textContent = "Approx. " + b.getAttribute("data-val");
+          }
         });
       });
     });
@@ -4743,18 +5199,22 @@
       // further in, not backing out, so the original card shouldn't get
       // overwritten.
       if (!state.viewingJobId) returnToJobId = b.getAttribute("data-view-job");
-      state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; state.editingLogDateId = null; state.editingPricingNoteId = null; state.movingLogId = null; state.sendToDrewOpen = false; render();
+      state.viewingJobId = b.getAttribute("data-view-job"); state.drewPricingView = false; state.jobActionsOpen = false; state.openLogActionsId = null; state.editingLogMaterialsCostId = null; state.editingLogDateId = null; state.editingPricingNoteId = null; state.movingLogId = null; state.sendToDrewOpen = false;
+      state.quoteDetailView = false; state.drewQuotingView = false;
+      render();
     }); });
     root.querySelectorAll("[data-view-job-drew]").forEach(function(b){ b.addEventListener("click", function(){
       if (!state.viewingJobId) returnToJobId = b.getAttribute("data-view-job-drew");
       state.viewingJobId = b.getAttribute("data-view-job-drew");
       state.drewPricingView = true; state.drewSaved = false; state.drewPriceMsg = null;
+      state.quoteDetailView = false; state.drewQuotingView = false;
       render();
     }); });
     var closeJobDetailBtn = root.querySelector('[data-action="close-job-detail"]');
     if (closeJobDetailBtn) closeJobDetailBtn.addEventListener("click", function(){
       state.viewingJobId=null; state.editingJobId=null; state.jobActionsOpen=false; state.openLogActionsId=null; state.editingLogMaterialsCostId=null; state.editingLogDateId=null; state.editingPricingNoteId=null; state.movingLogId=null;
       state.drewPricingView=false; state.drewSaving=false; state.drewSaved=false; state.drewPriceMsg=null; state.sendToDrewOpen=false;
+      state.quoteDetailView=false; state.drewQuotingView=false; state.drewQuoteSaving=false; state.drewQuoteSaved=false; state.drewQuotePriceMsg=null; state.quoteDeclineConfirmId=null;
       render();
       // A raw pixel scroll position didn't reliably survive the swap back
       // to a much taller page on every phone browser, even deferred a
@@ -4878,8 +5338,71 @@
     wireLiveSearch("drew-search-input", "drewQuery");
     wireLiveSearch("priced-search-input", "pricedQuery");
     wireLiveSearch("invoiced-search-input", "invoicedQuery");
+    wireLiveSearch("quote-search-input", "quoteQuery");
 
     root.querySelectorAll("[data-crew-jobs-tab]").forEach(function(b){ b.addEventListener("click", function(){ state.crewJobsTab=b.getAttribute("data-crew-jobs-tab"); state.crewJobSearch=""; render(); }); });
+
+    // ---------- Quote jobs ----------
+    root.querySelectorAll("[data-drew-sub]").forEach(function(b){ b.addEventListener("click", function(){ state.drewSub = b.getAttribute("data-drew-sub"); render(); }); });
+    var newQuoteBtn = root.querySelector('[data-action="new-quote"]');
+    if (newQuoteBtn) newQuoteBtn.addEventListener("click", function(){
+      state.quoteFormOpen = true; state.editingQuoteId = null; state.quoteFormMsg = null; render();
+    });
+    var cancelQuoteFormBtn = root.querySelector('[data-action="cancel-quote-form"]');
+    if (cancelQuoteFormBtn) cancelQuoteFormBtn.addEventListener("click", function(){
+      state.quoteFormOpen = false; state.editingQuoteId = null; state.quoteFormMsg = null; render();
+    });
+    var quoteForm = document.getElementById("quote-form");
+    if (quoteForm) quoteForm.addEventListener("submit", onSubmitQuoteForm);
+    root.querySelectorAll("[data-view-quote]").forEach(function(b){ b.addEventListener("click", function(){
+      state.viewingJobId = b.getAttribute("data-view-quote");
+      state.quoteDetailView = true; state.drewQuotingView = false; state.drewPricingView = false;
+      render();
+    }); });
+    var editQuoteBtn = root.querySelector('[data-action="edit-quote"]');
+    if (editQuoteBtn) editQuoteBtn.addEventListener("click", function(){
+      state.editingQuoteId = editQuoteBtn.getAttribute("data-job-id");
+      state.viewingJobId = null; state.quoteDetailView = false;
+      state.mgmtSub = "quotejobs"; state.quoteFormOpen = true; state.quoteFormMsg = null;
+      render();
+    });
+    var askToggleQuoteDeclinedBtn = root.querySelector('[data-action="ask-toggle-quote-declined"]');
+    if (askToggleQuoteDeclinedBtn) askToggleQuoteDeclinedBtn.addEventListener("click", function(){
+      state.quoteDeclineConfirmId = askToggleQuoteDeclinedBtn.getAttribute("data-job-id"); render();
+    });
+    var cancelToggleQuoteDeclinedBtn = root.querySelector('[data-action="cancel-toggle-quote-declined"]');
+    if (cancelToggleQuoteDeclinedBtn) cancelToggleQuoteDeclinedBtn.addEventListener("click", function(){
+      state.quoteDeclineConfirmId = null; render();
+    });
+    var confirmToggleQuoteDeclinedBtn = root.querySelector('[data-action="confirm-toggle-quote-declined"]');
+    if (confirmToggleQuoteDeclinedBtn) confirmToggleQuoteDeclinedBtn.addEventListener("click", function(){
+      toggleQuoteDeclined(confirmToggleQuoteDeclinedBtn.getAttribute("data-job-id"));
+    });
+    var convertQuoteBtn = root.querySelector('[data-action="convert-quote"]');
+    if (convertQuoteBtn) convertQuoteBtn.addEventListener("click", function(){
+      convertQuoteToJob(convertQuoteBtn.getAttribute("data-job-id"));
+    });
+    root.querySelectorAll("[data-quote-this-job]").forEach(function(b){ b.addEventListener("click", function(){
+      state.viewingJobId = b.getAttribute("data-quote-this-job");
+      state.drewQuotingView = true; state.quoteDetailView = false; state.drewPricingView = false;
+      render();
+    }); });
+    var drewQuoteSaveBtn = document.getElementById("drew-quote-save-btn");
+    if (drewQuoteSaveBtn) drewQuoteSaveBtn.addEventListener("click", function(){
+      var input = document.getElementById("drew-quote-price-input");
+      var descInput = document.getElementById("drew-desc-input");
+      var commentsInput = document.getElementById("drew-quote-comments-input");
+      var clientOn = document.querySelector('#drew-client-seg-wrap [data-seg="client"] .on');
+      setQuotePrice(drewQuoteSaveBtn.getAttribute("data-job-id"), input ? input.value : "", descInput ? descInput.value : "", commentsInput ? commentsInput.value : "", clientOn ? clientOn.getAttribute("data-val") : null);
+    });
+    // Same live GST hint pattern as Drew's ordinary price box.
+    var drewQuotePriceInput = document.getElementById("drew-quote-price-input");
+    var drewQuoteGstHint = document.getElementById("drew-quote-gst-hint");
+    if (drewQuotePriceInput && drewQuoteGstHint){
+      drewQuotePriceInput.addEventListener("input", function(){
+        drewQuoteGstHint.textContent = drewGstHintText(drewQuotePriceInput.value);
+      });
+    }
 
     var startMergeBtn = root.querySelector('[data-action="start-merge"]');
     if (startMergeBtn) startMergeBtn.addEventListener("click", function(){
