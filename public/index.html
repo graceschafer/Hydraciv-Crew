@@ -2054,6 +2054,14 @@
       if (admin || j.open !== false){
         html += '<button type="button" class="btn btn-ghost btn-sm" data-print-job="'+esc(j.id)+'">Print</button>';
       }
+      // A big job several crew members go to — flagging it here lets them
+      // all find and add their own update to THIS job from their own
+      // phone (see renderGroupJobBrowser), instead of each starting a new
+      // one that needs merging after. Open to crew too (not just admin) —
+      // this is exactly the case where whoever's actually onsite, like
+      // Jayden knowing several people will be in and out of a job, is the
+      // one who'd know to flag it, not management.
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-action="toggle-group-job" data-job-id="'+esc(j.id)+'">'+(j.groupJob ? "Remove group job flag" : "Mark as a group job") + '</button>';
       if (admin){
         // For pasting straight into the Word invoice / ALH's upload system —
         // venue, description, every visit, materials, hours and price, as
@@ -2077,11 +2085,6 @@
         if (j.isMerged){
           html += '<button type="button" class="btn btn-ghost btn-sm" data-action="start-unmerge" data-job-id="'+esc(j.id)+'">Unmerge&hellip;</button>';
         }
-        // A big job several crew members go to — flagging it here lets them
-        // all find and add their own update to THIS job from their own
-        // phone (see renderGroupJobBrowser), instead of each starting a new
-        // one and this needing merging after the fact.
-        html += '<button type="button" class="btn btn-ghost btn-sm" data-action="toggle-group-job" data-job-id="'+esc(j.id)+'">'+(j.groupJob ? "Remove group job flag" : "Mark as a group job") + '</button>';
       }
       html += '</div>';
     }
@@ -6080,10 +6083,18 @@
         // Keep the job's assignedEmployees up to date with everyone who's actually
         // logged a visit to it (not just whoever created it) — arrayUnion so this
         // never duplicates or overwrites earlier names.
-        return db.collection("jobs").doc(jobId).update({
+        var jobPatch = {
           open: !completed, lastUpdatedAt: new Date().toISOString(),
           assignedEmployees: firebase.firestore.FieldValue.arrayUnion(state.session.name)
-        });
+        };
+        // "My part's done" means someone else needs to pick this job back up
+        // — flagging it a group job the instant that happens (never cleared
+        // here, only ever by the "Remove group job flag" action) means
+        // whoever comes back can find it and add their own update instead of
+        // starting a duplicate that needs merging later. See
+        // renderGroupJobBrowser.
+        if (crewDone) jobPatch.groupJob = true;
+        return db.collection("jobs").doc(jobId).update(jobPatch);
       });
     }
 
@@ -6109,7 +6120,14 @@
         editedBy: state.session.name, editedAt: new Date().toISOString(),
       };
       if (fl.hasMaterialsCostField) patch.materialsCost = materialsCost;
-      p = db.collection("job-logs").doc(editLogId).update(patch).then(function(){ return recomputeJobOpen(editJobId); });
+      p = db.collection("job-logs").doc(editLogId).update(patch).then(function(){
+        return recomputeJobOpen(editJobId);
+      }).then(function(){
+        // Same auto-flag as a brand-new log (see afterLog above) — editing an
+        // existing entry to tick "My part's done" should flag the job findable
+        // by whoever's picking it back up too, not just a fresh entry.
+        if (crewDone) return db.collection("jobs").doc(editJobId).update({ groupJob: true });
+      });
     } else {
       var jobId = f.getAttribute("data-job-id");
       var job = state.jobs.filter(function(j){return j.id===jobId;})[0];
